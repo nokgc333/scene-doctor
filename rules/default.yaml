@@ -1,0 +1,14 @@
+schema_version: 1
+project_type: generic
+naming_rules:
+  - pattern: '^geo_[a-z0-9_]+$'
+    applies_to: geo
+    description: "Geometryノードはgeo_で始まるsnake_case"
+    rename_template: "geo_{seq:03d}"
+  - pattern: '^xform_[a-z0-9_]+$'
+    applies_to: xform
+    description: "Transformノードはxform_で始まるsnake_case"
+    rename_template: "xform_{seq:03d}"
+  - pattern: '.*'
+    applies_to: all
+    description: "その他ノード種別は既定では規則を課さない（明示的に緩いルールとして定義）"

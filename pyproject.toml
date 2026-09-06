@@ -1,0 +1,50 @@
+[project]
+name = "scene-doctor"
+version = "0.1.0"
+description = "Houdiniシーンのジオメトリ欠陥・ノード構造・命名規則を自動検出するツール"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "PyYAML>=6.0.2,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=5.0,<6",
+    "black>=24.0",
+    "flake8>=7.1",
+    "isort>=5.13",
+    "mypy>=1.11",
+    "pip-audit>=2.7",
+    "types-PyYAML",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["scene_doctor*"]
+
+[tool.mypy]
+strict = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+exclude = ["scene_doctor/adapters/"]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+addopts = "--cov=scene_doctor --cov=scene_doctor_cli --cov-report=term-missing"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+# adapters/ は hou がない環境では実行できないため、CIのカバレッジ計測から除外する
+# （hda/・pdg/ 同様、実機でのみ検証可能。仕様書§11.2参照）。
+omit = ["scene_doctor/adapters/*"]

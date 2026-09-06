@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: black --check .
+      - run: isort --check .
+      - run: flake8 scene_doctor/ scene_doctor_cli.py tests/
+      - run: mypy scene_doctor/ scene_doctor_cli.py
+      - name: "静的チェック: checks/配下がhouをimportしていないこと（FR-006 TC-021）"
+        run: |
+          if grep -rn "^import hou\|^from hou" scene_doctor/checks/; then
+            echo "checks/ must not depend on hou directly"; exit 1
+          fi
+      - name: "静的チェック: exec/evalの不使用（SEC-002）"
+        run: |
+          if grep -rn "exec(\|eval(" scene_doctor/ scene_doctor_cli.py; then
+            echo "exec/eval must not be used"; exit 1
+          fi
+      - run: pytest --cov-fail-under=80
+      - run: pip-audit
