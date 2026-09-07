@@ -8,3 +8,4 @@ __pycache__/
 htmlcov/
 .DS_Store
 *.hip.bak
+hda/backup/

@@ -30,7 +30,10 @@ def check_naming(
 ) -> list[Violation]:
     """命名規則に違反するノードを検出し、rename_templateがあればリネーム候補を付与する。"""
     violations: list[Violation] = []
-    existing_names = {node.name() for node in _iter_nodes(network, recurse)}
+    # 既存ノード名 + このバッチ内で既に提案した候補名の両方を避ける。
+    # 実機検証(Houdini)で、同一バッチ内の複数違反が同じ候補(geo_001等)を
+    # 重複提案する不具合が見つかったため、生成した候補を都度この集合に追加していく。
+    reserved_names = {node.name() for node in _iter_nodes(network, recurse)}
 
     for node in _iter_nodes(network, recurse):
         applicable = [
@@ -43,7 +46,8 @@ def check_naming(
                 continue
             rename_candidate = None
             if rule.rename_template is not None:
-                rename_candidate = generate_rename_candidate(node, rule, existing_names)
+                rename_candidate = generate_rename_candidate(node, rule, reserved_names)
+                reserved_names.add(rename_candidate)
             violations.append(
                 Violation(
                     check_type="naming",

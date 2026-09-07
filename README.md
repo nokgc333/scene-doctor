@@ -84,7 +84,26 @@ print(report.violation_count)
 "
 ```
 
-`hda/SceneDoctor.hdalc`のパラメータUI化・`pdg/batch_topnet.hip`のTOPsネットワーク構築は未実施（下記「既知の制限事項」参照）。
+### HDA実機検証結果（2026-09-07実施）
+
+`hda/SceneDoctor.hdalc`をHoudini 22.0上で実際に構築し、Run All Checks / Export CSV/JSON / Apply Rename Candidatesの全ボタンを動作確認した（`hda/scene_doctor_demo.hip`にテストシーンを保存）。
+
+**重要な設計変更**: 当初`null`SOPをベースにHDA化しようとしたが、`node.canCreateDigitalAsset()`が`False`を返し変換不能だった（Houdiniの制約上、リーフ型のSOPはHDA化できず、`subnet`のようなコンテナ型のみが変換可能）。`subnet`ベースに変更して解決した（[ADR-0005](docs/adr/0005-hda-subnet-base.md)）。
+
+さらに実機検証で2件のバグを発見・修正した。
+
+| 発見箇所 | 症状 | 原因 | 対応 |
+|---|---|---|---|
+| `Run All Checks`ボタン | `No module named 'yaml'` | hython同梱Pythonにpyyaml未同梱 | PythonModuleが`.venv`のsite-packagesをフォールバックで検索するように変更（本番運用では`hython -m pip install pyyaml`を推奨） |
+| 同一バッチ内の複数naming違反 | `box1`と`box2`が両方とも`geo_001`を提案（実際の適用時はHoudini側のunique_name機構で衝突は避けられるが、レポート上の表示が不正確） | `generate_rename_candidate`が「既存ノード名」のみを避け、「このバッチ内で既に提案済みの候補」を考慮していなかった | 提案するたびに候補名を`reserved_names`集合へ追加し、以降の候補生成で回避するよう修正（`checks/naming.py`、テストケース追加済み） |
+
+`Apply Rename Candidates`実行後、`box1`→`geo_001`、`box2_unconnected`→`geo_002`と重複なくリネームされたことを実機で確認した。
+
+`hda/python_module_source.py`にPythonModuleセクションの可読コピーを同梱している（`.hdalc`本体はバイナリのためdiffが読めないことへの対策）。
+
+### PDGバッチ処理（未実施）
+
+`pdg/batch_topnet.hip`のTOPsネットワーク構築はまだ行っていない（下記「既知の制限事項」参照）。
 
 ## テスト
 
@@ -93,13 +112,14 @@ pytest --cov-fail-under=80
 black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py tests/ && mypy scene_doctor/ scene_doctor_cli.py
 ```
 
-39テスト全pass、カバレッジ94%（`adapters/`はカバレッジ計測から除外、理由は[Design Decisions](#design-decisions)参照）。
+40テスト全pass、カバレッジ94%（`adapters/`はカバレッジ計測から除外、理由は[Design Decisions](#design-decisions)参照）。
 
 ## 既知の制限事項
 
-- `hda/SceneDoctor.hdalc` と `pdg/batch_topnet.hip` は設計のみで、実際のHDA/TOPsネットワークはHoudini上で作成する必要がある
+- `pdg/batch_topnet.hip` のTOPsネットワーク構築は未実施
 - ノード探索戦略（`/obj`配下でDisplayフラグが立つ最初のgeoノードを対象にする）は単純化した初期実装であり、複数geoノードを持つ複雑なシーンでの妥当性は未検証
-- `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hipの3シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
+- `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hip / scene_doctor_demo.hipの4シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
+- HDAのPythonModuleは開発中の事故防止のため毎回scene_doctorパッケージを強制リロードする（本番運用では削除しパフォーマンスを優先する余地あり）
 
 ## Design Decisions
 

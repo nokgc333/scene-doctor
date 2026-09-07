@@ -50,6 +50,26 @@ class TestCheckNaming:
 
         assert check_naming(network, rules) == []
 
+    def test_multiple_violations_in_same_batch_get_distinct_rename_candidates(self) -> None:
+        """実機検証(Houdini)で発見: 同一バッチ内の複数違反が同じ候補名(geo_001)を
+        重複提案していた。2件目以降は1件目の提案済み候補を避けなければならない。
+        """
+        network = FakeNode(
+            "/obj",
+            "obj",
+            _children=[
+                FakeNode("/obj/box1", "box1", _type_name="geo"),
+                FakeNode("/obj/box2", "box2", _type_name="geo"),
+            ],
+        )
+        rules = [_rule(r"^geo_[a-z0-9_]+$", rename_template="geo_{seq:03d}")]
+
+        violations = check_naming(network, rules)
+
+        candidates = [v.rename_candidate for v in violations]
+        assert candidates == ["geo_001", "geo_002"]
+        assert len(set(candidates)) == len(candidates)
+
 
 class TestGenerateRenameCandidate:
     def test_first_candidate_has_no_suffix_collision(self) -> None:
