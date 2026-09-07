@@ -31,7 +31,10 @@ class HouPrimAdapter:
         return [vertex.point().number() for vertex in self._prim.vertices()]
 
     def measured_area(self) -> float:
-        return float(self._prim.attribValue("measuredarea"))
+        # "measuredarea"はアトリビュートではなくintrinsic（計算プロパティ）。
+        # 実機検証(spiderweb_v1.hip)で attribValue("measuredarea") が
+        # hou.OperationFailed になることを確認し、intrinsicValueに修正した。
+        return float(self._prim.intrinsicValue("measuredarea"))
 
 
 class HouGeometryAdapter:
@@ -45,10 +48,24 @@ class HouGeometryAdapter:
 
 
 class HouNodeAdapter:
-    """hou.Node を NodeLike に適合させる薄いラッパー。"""
+    """hou.Node を NodeLike に適合させる薄いラッパー。
 
-    def __init__(self, node: "hou.Node") -> None:
+    boundary_category: 走査対象として許容するノードカテゴリ名（例: "Sop"）。
+    未指定の場合はこのノード自身の子カテゴリ（childTypeCategory）を境界として確定し、
+    生成する子アダプタすべてに同じ境界を引き継がせる。これにより、
+    ルート直下の通常のカテゴリ遷移（例: Object配下のSopノード群）は正しく辿りつつ、
+    DOP Network SOPのように異なるグラフの世界（Dop等）を内包するノードに出会った際は
+    その内部には踏み込まない（実機検証 tornado_00.hiplc で判明した無限再帰的ハングへの対処）。
+    """
+
+    def __init__(self, node: "hou.Node", boundary_category: str | None = None) -> None:
         self._node = node
+        self._boundary_category: str | None
+        if boundary_category is not None:
+            self._boundary_category = boundary_category
+        else:
+            child_category = node.childTypeCategory()
+            self._boundary_category = child_category.name() if child_category else None
 
     def path(self) -> str:
         return str(self._node.path())
@@ -60,19 +77,44 @@ class HouNodeAdapter:
         return str(self._node.type().name())
 
     def output_connections(self) -> Sequence["NodeLike"]:
-        return [HouNodeAdapter(c.outputNode()) for c in self._node.outputConnections()]
+        # 実機検証(spiderweb_v1.hip)で判明: outputConnections()の要素のoutputNode()が
+        # Noneを返すケースが存在する（サブネット出力への接続等）。
+        # Noneのままアダプタ化するとchildTypeCategory()呼び出しでクラッシュするため除外する。
+        return [
+            HouNodeAdapter(n, self._boundary_category)
+            for c in self._node.outputConnections()
+            if (n := c.outputNode()) is not None
+        ]
 
     def is_display_flag_set(self) -> bool:
-        return bool(self._node.isDisplayFlagSet())
+        # SOPネットワーク内にDOP Network SOP等が存在すると、再帰走査がDOPNode等の
+        # 異なるノードカテゴリに踏み込むことがある。isDisplayFlagSet等のフラグ系メソッドは
+        # SOP/OBJ固有でDopNodeには存在しないため、実機検証(tornado_00.hiplc, TC-023)で
+        # AttributeErrorを確認済み。フラグを持たないノード種別は「フラグなし」として
+        # 安全側（誤検出よりクラッシュしないことを優先）にFalseを返す。
+        method = getattr(self._node, "isDisplayFlagSet", None)
+        return bool(method()) if method is not None else False
 
     def is_render_flag_set(self) -> bool:
-        return bool(self._node.isRenderFlagSet())
+        method = getattr(self._node, "isRenderFlagSet", None)
+        return bool(method()) if method is not None else False
 
     def is_bypassed(self) -> bool:
-        return bool(self._node.isBypassed())
+        method = getattr(self._node, "isBypassed", None)
+        return bool(method()) if method is not None else False
 
     def children(self) -> Sequence["NodeLike"]:
-        return [HouNodeAdapter(c) for c in self._node.children()]
+        # boundary_categoryと異なるカテゴリの子（DOP Network SOP配下のDopNode等）は
+        # 除外する。境界はルート生成時に一度だけ確定し、子孫アダプタへ引き継がれるため、
+        # ルート直下の通常のカテゴリ遷移（Object配下のSop群等）は正しく含まれる。
+        children = self._node.children()
+        if self._boundary_category is None:
+            return [HouNodeAdapter(c, self._boundary_category) for c in children]
+        return [
+            HouNodeAdapter(c, self._boundary_category)
+            for c in children
+            if c.type().category().name() == self._boundary_category
+        ]
 
     def set_name(self, new_name: str) -> None:
         self._node.setName(new_name, unique_name=True)

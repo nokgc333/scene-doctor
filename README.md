@@ -30,7 +30,7 @@ scene_doctor_cli.py         # hythonから起動するCLIエントリポイン�
 
 ## 技術スタック
 
-- Python 3.11+ / hython（Houdini 20.5 Indie/Education同梱）
+- Python 3.11+ / hython（Houdini 22.0 Indie同梱で実機検証済み。仕様書上のターゲットは20.5だが、22.0でも動作を確認）
 - PyYAML（`yaml.safe_load`のみ使用）
 - pytest / pytest-cov / mypy(strict, adaptersのみhouスタブ不在のため一部緩和) / black / isort / flake8 / pip-audit
 
@@ -50,14 +50,41 @@ hython scene_doctor_cli.py --hip path/to/scene.hip --rules rules/default.yaml --
 
 終了コード: `0`=違反なし / `1`=違反あり / `10`〜`14`=エラー系（詳細は [docs/仕様書.md §5.6](docs/仕様書.md)）
 
-### 実機での検証手順（このリポジトリのCIではカバーできない部分）
+### 実機検証結果（2026-09-07実施、TC-023 / TC-024）
 
-このリポジトリのCIはHoudini自体を含まないため、以下は実際のHoudini上での手動確認が必要です（要件定義書 TC-023, TC-024）。
+`hython`ネイティブ実行（Houdini 22.0.429、RPC非経由）で`tornado_00.hiplc` / `spiderweb_v1.hip` / `spiderweb_v2.hip`に対して実行し、以下3件の実データ特有のバグを発見・修正した。
 
-1. Houdiniで `~/3dcg-dev/houdini_dev/tornado_00.hiplc` を開く
-2. `hda/SceneDoctor.hdalc` を対象SOPネットワークに配置し、`Run All Checks` を実行
-3. 既知の欠陥（非多様体等）が検出されることを確認し、検出件数を記録する
-4. `spiderweb_v1.hip` と `spiderweb_v2.hip` を比較し、違反件数の差分をレポートできることを確認する
+| 発見箇所 | 症状 | 原因 | 対応 |
+|---|---|---|---|
+| `is_display_flag_set`等 | `AttributeError: 'DopNode' object has no attribute 'isRenderFlagSet'` | DOP Network SOP配下のDOPノードにSOP専用フラグメソッドを呼んでいた | 対象ノードがメソッドを持たない場合はFalseを返す（`hou_adapter.py`） |
+| `children()`の再帰 | DOPネットワーク内部への再帰で実質ハング（120秒経っても未完了） | ノードカテゴリ境界（Sop/Dop等）を意識せず無制限に再帰していた | ルート確定時のカテゴリを境界として、異なるカテゴリの子は辿らない |
+| `measured_area()` | `hou.OperationFailed`（`attribValue("measuredarea")`） | `measuredarea`はアトリビュートではなくintrinsic | `intrinsicValue("measuredarea")`に修正 |
+| `output_connections()` | `AttributeError: 'NoneType' object has no attribute 'childTypeCategory'` | `c.outputNode()`がNoneを返すケースがあった | Noneを除外 |
+
+修正後、`spiderweb_v1.hip`（62,749プリム）に対し**build_report: 2.12秒**で完走し、56,788件の違反（大半はzero_area。糸状ジオメトリのため多くのプリミティブが実質面積を持たない、想定通りの結果）を検出。`spiderweb_v2.hip`も同一件数を検出し、v1/v2比較が正しく機能することを確認した。
+
+このリポジトリのCI自体にはHoudiniを含められないため、上記はローカルでの手動検証であり自動化されていない。同じ手順を再現する場合:
+
+```bash
+HYTHON="/path/to/Houdini/Resources/bin/hython"
+cd scene_doctor
+"$HYTHON" -c "
+import sys
+sys.path.insert(0, '.')
+sys.path.insert(0, '.venv/lib/python3.12/site-packages')  # PyYAMLをhython側から見えるようにする
+from scene_doctor.adapters.hou_adapter import load_scene
+from scene_doctor_cli import build_report, validate_target_is_sop_network
+from pathlib import Path
+
+hip_path = Path('/path/to/scene.hip')
+geo, network = load_scene(hip_path)
+validate_target_is_sop_network(network)
+report = build_report(str(hip_path), geo, network, naming_rules=[])
+print(report.violation_count)
+"
+```
+
+`hda/SceneDoctor.hdalc`のパラメータUI化・`pdg/batch_topnet.hip`のTOPsネットワーク構築は未実施（下記「既知の制限事項」参照）。
 
 ## テスト
 
@@ -70,9 +97,9 @@ black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py t
 
 ## 既知の制限事項
 
-- `adapters/hou_adapter.py` の正しさは実機（Houdini）でのみ検証可能。この開発環境では検証できていない
 - `hda/SceneDoctor.hdalc` と `pdg/batch_topnet.hip` は設計のみで、実際のHDA/TOPsネットワークはHoudini上で作成する必要がある
 - ノード探索戦略（`/obj`配下でDisplayフラグが立つ最初のgeoノードを対象にする）は単純化した初期実装であり、複数geoノードを持つ複雑なシーンでの妥当性は未検証
+- `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hipの3シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
 
 ## Design Decisions
 
