@@ -101,9 +101,27 @@ print(report.violation_count)
 
 `hda/python_module_source.py`にPythonModuleセクションの可読コピーを同梱している（`.hdalc`本体はバイナリのためdiffが読めないことへの対策）。
 
-### PDGバッチ処理（未実施）
+### PDGバッチ処理
 
-`pdg/batch_topnet.hip`のTOPsネットワーク構築はまだ行っていない（下記「既知の制限事項」参照）。
+`pdg/batch_topnet.hip`にTOPsネットワークを構築済み（仕様書§10.1準拠）。
+
+```
+[File Pattern TOP: hip_files] --*.hip*をglob--> [Python Script TOP: run_scene_doctor]
+    --hython scene_doctor_cli.pyをサブプロセス起動(固定引数のみ、SEC-002)--> [Wait For All TOP]
+    --> [Python Script TOP: aggregate_reports] --個別JSONを集約-->
+        pdg/reports/aggregate_report.json / .csv
+```
+
+`File Pattern`単体のcook（`~/3dcg-dev/houdini_dev/spiderweb_v1.hip`1件の検出・cook成功）は
+実機で確認できたが、`houdini_mcp`（RPCブリッジ、検証専用ツール）経由での
+`cookOutputWorkItems()`等によるネットワーク全体の自動cookは、下流ノードへの
+ワークアイテム伝播が機能せず断念した（PDGの非同期cook処理がRPC越しの同期呼び出しと
+相性が悪いためと推定、[ADR-0006](docs/adr/0006-pdg-manual-cook-only.md)）。
+
+**そのため、バッチ処理全体の動作確認にはHoudini UI上での手動cook実行が必要**（TOPネットワーク
+ペインを開き、`aggregate_reports`ノードを選択して「Cook Output Node」を実行する）。
+`pdg/run_scene_doctor_source.py` / `pdg/aggregate_reports_source.py`に各Python Script TOPの
+可読コピーを同梱している。
 
 ## テスト
 
@@ -116,7 +134,7 @@ black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py t
 
 ## 既知の制限事項
 
-- `pdg/batch_topnet.hip` のTOPsネットワーク構築は未実施
+- `pdg/batch_topnet.hip` はネットワーク構築済みだが、cook実行の自動E2E検証はできていない（Houdini UI上での手動実行が必要、[ADR-0006](docs/adr/0006-pdg-manual-cook-only.md)）
 - ノード探索戦略（`/obj`配下でDisplayフラグが立つ最初のgeoノードを対象にする）は単純化した初期実装であり、複数geoノードを持つ複雑なシーンでの妥当性は未検証
 - `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hip / scene_doctor_demo.hipの4シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
 - HDAのPythonModuleは開発中の事故防止のため毎回scene_doctorパッケージを強制リロードする（本番運用では削除しパフォーマンスを優先する余地あり）
