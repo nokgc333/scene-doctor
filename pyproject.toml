@@ -43,6 +43,10 @@ profile = "black"
 [tool.pytest.ini_options]
 addopts = "--cov=scene_doctor --cov=scene_doctor_cli --cov-report=term-missing"
 testpaths = ["tests"]
+# tests/fakes.py を `from tests.fakes import ...` で参照するため、
+# 素の `pytest` 起動（`python -m pytest` を使わない場合）でもリポジトリルートを
+# sys.path に含める。CI（.github/workflows/ci.yml）はまさにこの起動方法を使う。
+pythonpath = ["."]
 
 [tool.coverage.run]
 # adapters/ は hou がない環境では実行できないため、CIのカバレッジ計測から除外する
