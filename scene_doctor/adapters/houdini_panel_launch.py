@@ -8,8 +8,10 @@ CIの単体テスト・カバレッジ計測・mypyの対象からも除外し�
 
 --- 実機での検証について ---
 本ファイルの正しさは、この開発環境（Houdiniなし）では検証できない。
-このセッションでは実機Houdini上での動作確認を行っていない（別セッションで実施予定）。
-README「既知の制限事項」参照。
+実機Houdini（22.0.429）上でlaunch_panel()・Run Checks・行クリックでのノード選択・
+severity/categoryフィルタ・Export CSV/JSONの動作を確認済み（README「実機検証結果」参照）。
+`launch_panel()`はHoudiniのメインスレッド上から呼び出すこと（バックグラウンドスレッドから
+呼び出すとQtのロックによりHoudini自体がフリーズすることを実機検証で確認済み、README参照）。
 """
 
 from __future__ import annotations

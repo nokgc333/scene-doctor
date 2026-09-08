@@ -78,6 +78,32 @@ panel = launch_panel()
 ネットワークエディタでフレーミングする。「Export CSV / Export JSON」で
 `export_path_edit`に入力したパス（空の場合は`$HIP/scene_doctor_report`）へ出力する。
 
+> **注意（メインスレッド制約）**: `launch_panel()`はQtウィジェットを生成するため、必ずHoudiniの
+> メインスレッド上（Python Shell・shelf tool・メニュー項目など）から呼び出すこと。バックグラウンド
+> スレッドから呼び出すとQtの内部ロックにより**Houdini自体がフリーズする**（実機検証で実際に発生・
+> 詳細は下記「実機検証結果」参照）。外部プロセスから安全に呼び出す必要がある場合は
+> `hdefereval.executeInMainThreadWithResult()`等でメインスレッドへマーシャリングすること。
+
+### PySide6パネル 実機検証結果（2026-09-08実施）
+
+Houdini本体（Houdini Indie 22.0.429）に実際にドッキングパネルを起動し、Run Checks・行クリックでの
+ノード選択ジャンプ・severity/categoryフィルタ・Export CSV/JSONの全機能を動作確認した（houdini_mcpの
+HTTPブリッジが接続不能だったため、hrpycへ直接rpyc接続し`hdefereval.executeInMainThreadWithResult()`
+経由でHoudini本体のメインスレッド上でパネルを操作する形で検証した）。
+
+| 発見箇所 | 症状 | 原因 | 対応 |
+|---|---|---|---|
+| `launch_panel()`の呼び出しスレッド | Houdini本体が応答不能になった（再起動が必要になった） | rpycのバックグラウンドディスパッチスレッドから直接`launch_panel()`を呼び出し、QWidgetをメインスレッド以外で生成・表示してしまった | `hdefereval.executeInMainThreadWithResult()`でメインスレッドにマーシャリングして呼び出すよう検証方法を修正。通常のユーザー操作（Python Shell/shelf toolからの実行）は元々メインスレッド上で実行されるため、この問題は発生しない。READMEに注意書きとして明記 |
+| ノード探索範囲 | 意図的に壊した2つのgeoノードのうち、Displayフラグが立つ方（1つ）しか検査されなかった | 既知の制限事項として設計時から文書化済み（v1の単純化仕様）。実機で再現・再確認した | 対応不要（既知の制限として明記済み、[既知の制限事項](#既知の制限事項)参照） |
+
+修正後、`/obj/geo1`配下に未接続ノード（`stray_sphere`）を仕込んだシーンで`Run Checks`を実行し、
+1件の`unconnected_node`違反を正しく検出・ツリー表示した。違反行をクリックすると
+`hou.selectedNodes()`が対象ノード1件を正しく返すことを確認し、`severity_filter`を`error`に
+切り替えると該当0件（実際にerror severityの違反が存在しないため）、`All`に戻すと2件（2つ目の
+未接続ノードを追加した状態）に正しく増減することを確認した。Export CSV/JSONも実際に
+`/tmp/`へファイルを書き出し、内容が`report_to_csv_rows`/`report_to_json`の出力と一致することを
+確認した。
+
 ### 実機検証結果（2026-09-07実施、TC-023 / TC-024）
 
 `hython`ネイティブ実行（Houdini 22.0.429、RPC非経由）で`tornado_00.hiplc` / `spiderweb_v1.hip` / `spiderweb_v2.hip`に対して実行し、以下3件の実データ特有のバグを発見・修正した。
@@ -173,7 +199,7 @@ black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py t
 - ノード探索戦略（`/obj`配下でDisplayフラグが立つ最初のgeoノードを対象にする）は単純化した初期実装であり、複数geoノードを持つ複雑なシーンでの妥当性は未検証
 - `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hip / scene_doctor_demo.hipの4シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
 - HDAのPythonModuleは開発中の事故防止のため毎回scene_doctorパッケージを強制リロードする（本番運用では削除しパフォーマンスを優先する余地あり）
-- `adapters/houdini_panel_launch.py`は実機Houdini環境でのみ動作確認可能なため、このセッションでは自動テスト対象外（別セッションで実機検証予定）。`hou.qt.mainWindow()`を親にしたフローティング表示という簡易実装に留めており、`hou.ui.curDesktop()`経由の正式なタブドッキングへの統合可否・ネットワークエディタのフレーミング処理（`homeToSelection()`）の実際の挙動は未検証
+- `adapters/houdini_panel_launch.py`は実機Houdini環境でのみ動作確認可能なため自動テスト対象外。Run Checks・行クリックでのノード選択（`hou.selectedNodes()`）・severity/categoryフィルタ・Export CSV/JSONは実機検証済み（[実機検証結果](#pyside6パネル-実機検証結果2026-09-08実施)参照）。ただし`hou.ui.curDesktop()`経由の正式なタブドッキングへの統合可否と、ネットワークエディタのフレーミング処理（`network_editor.homeToSelection()`、検証時にネットワークエディタペインを開いていなかったため未検証）は今回のセッションでは確認できていない
 
 ## Design Decisions
 

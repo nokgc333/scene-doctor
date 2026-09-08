@@ -42,11 +42,17 @@ GUI層を2段に分離する（ADR-0001のPorts & Adaptersと同じ思想）。
       モックではなく本物のPySide6ウィジェットとしてTDDできる（このセッションで72テスト、
       `panel.py`/`panel_view_model.py`ともカバレッジ100%を達成）。
 悪い: `houdini_panel_launch.py`自体（実際のドッキング処理・ノード選択・エクスポート）は
-      実機Houdini上での手動確認に頼らざるを得ない（このセッションでは未実施、README
-      「既知の制限事項」参照）。
+      実機Houdini上での手動確認に頼らざるを得ない（2026-09-08に実機検証済み、README
+      「PySide6パネル 実機検証結果」参照。ただし`hou.ui.curDesktop()`経由の正式な
+      タブドッキング統合とネットワークエディタのフレーミング処理は未検証）。
       また`hou.qt`の正確なドッキングAPI（`hou.ui.curDesktop()`経由のタブ統合等）は
       バージョン差異があり、`launch_panel()`は`hou.qt.mainWindow()`を親にした
       フローティングウィンドウ表示という簡易な実装に留めている。
+      さらに実機検証で、`launch_panel()`をHoudiniのメインスレッド以外（今回はrpycの
+      バックグラウンドディスパッチスレッド）から呼び出すとQtの内部ロックにより
+      Houdini自体がフリーズすることが判明した。通常の使用方法（Python Shell/shelf tool
+      からの呼び出し）は元々メインスレッド上で実行されるため影響しないが、外部プロセスから
+      呼び出す場合は`hdefereval.executeInMainThreadWithResult()`等でのマーシャリングが必須。
 
 ## Alternatives Considered
 - `panel.py`もモック（`unittest.mock`）でQt呼び出しを検証する: 実際のシグナル/スロット
