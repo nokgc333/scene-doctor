@@ -18,21 +18,33 @@ Houdiniシーンのジオメトリ欠陥（非多様体・N-gon・ゼロ面積�
 scene_doctor/
 ├── interfaces.py        # GeometryLike / NodeLike Protocol
 ├── adapters/
-│   └── hou_adapter.py   # 実houへの依存はここに閉じ込める（hython専用、CIでは検証不可）
+│   ├── hou_adapter.py            # 実houへの依存はここに閉じ込める（hython専用、CIでは検証不可）
+│   └── houdini_panel_launch.py   # PySide6パネルの実Houdiniドッキング（同上、CIでは検証不可）
 ├── checks/
 │   ├── geometry.py       # 非多様体・N-gon・ゼロ面積
 │   ├── naming.py         # 命名規則違反・リネーム候補
 │   └── nodes.py          # 未接続・未使用（バイパス）ノード
+├── ui/
+│   ├── panel_view_model.py  # DCC非依存: SceneReport→表示行データの変換・フィルタ・ソート
+│   └── panel.py              # PySide6のQDockWidget。houは一切importしない（DI疎結合）
 ├── rules.py               # 命名規則YAML読込
 └── report.py              # CSV/JSON出力
 scene_doctor_cli.py         # hythonから起動するCLIエントリポイント
 ```
 
+HDA（パラメータUIのみ）に加え、Houdini本体にドッキングするリッチなPySide6カスタムパネル
+（違反一覧のツリー表示・クリックでのノード選択ジャンプ・severity/categoryフィルタ）を
+`scene_doctor/ui/`に実装している。GUI層にもPorts & Adaptersと同じ思想を適用し、
+`panel_view_model.py`（DCC非依存の純粋関数）と`panel.py`（PySide6のみ、houは不使用）を
+コールバック注入で疎結合にすることで、`QT_QPA_PLATFORM=offscreen`のヘッドレス環境でも
+本物のPySide6ウィジェットとして`pytest-qt`でTDDできる（[ADR-0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md)）。
+
 ## 技術スタック
 
 - Python 3.11+ / hython（Houdini 22.0 Indie同梱で実機検証済み。仕様書上のターゲットは20.5だが、22.0でも動作を確認）
 - PyYAML（`yaml.safe_load`のみ使用）
-- pytest / pytest-cov / mypy(strict, adaptersのみhouスタブ不在のため一部緩和) / black / isort / flake8 / pip-audit
+- PySide6（Houdini同梱の`hou.qt`経由で実機利用、開発・テストは`pip install PySide6`で導入）
+- pytest / pytest-cov / pytest-qt（`QT_QPA_PLATFORM=offscreen`でPySide6ウィジェットをヘッドレステスト） / mypy(strict, adaptersのみhouスタブ不在のため一部緩和) / black / isort / flake8 / pip-audit
 
 ## インストール（開発・テスト用、Houdini不要）
 
@@ -49,6 +61,22 @@ hython scene_doctor_cli.py --hip path/to/scene.hip --rules rules/default.yaml --
 ```
 
 終了コード: `0`=違反なし / `1`=違反あり / `10`〜`14`=エラー系（詳細は [docs/仕様書.md §5.6](docs/仕様書.md)）
+
+### PySide6カスタムパネルの起動（実機・Houdini本体専用）
+
+Houdiniの Python Shell、または shelf tool のスクリプトから以下を実行するとパネルが起動する。
+
+```python
+from scene_doctor.adapters.houdini_panel_launch import launch_panel
+
+panel = launch_panel()
+```
+
+`launch_panel()`は`hou.qt.mainWindow()`を親にした`SceneDoctorPanel`（`QDockWidget`）を
+フローティング表示する。パネル上の「Run Checks」で現在の`/obj`配下の対象geoノードを検証し、
+違反一覧をツリー表示する。行をクリックすると対象ノードを選択・カレント化し、
+ネットワークエディタでフレーミングする。「Export CSV / Export JSON」で
+`export_path_edit`に入力したパス（空の場合は`$HIP/scene_doctor_report`）へ出力する。
 
 ### 実機検証結果（2026-09-07実施、TC-023 / TC-024）
 
@@ -132,7 +160,12 @@ pytest --cov-fail-under=80
 black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py tests/ && mypy scene_doctor/ scene_doctor_cli.py
 ```
 
-40テスト全pass、カバレッジ94%（`adapters/`はカバレッジ計測から除外、理由は[Design Decisions](#design-decisions)参照）。
+72テスト全pass、カバレッジ96%（`adapters/`はカバレッジ計測から除外、理由は[Design Decisions](#design-decisions)参照）。
+`scene_doctor/ui/panel_view_model.py`・`scene_doctor/ui/panel.py`はいずれもカバレッジ100%。
+`panel.py`は`QT_QPA_PLATFORM=offscreen`（`tests/conftest.py`）でヘッドレスQApplicationを起動し、
+`pytest-qt`の`qtbot`で本物のPySide6ウィジェット（`SceneDoctorPanel`）に対しボタンクリック・
+行選択・severity/categoryフィルタ変更など実際のシグナル/スロットを検証している
+（`tests/test_panel.py`）。
 
 ## 既知の制限事項
 
@@ -140,6 +173,7 @@ black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py t
 - ノード探索戦略（`/obj`配下でDisplayフラグが立つ最初のgeoノードを対象にする）は単純化した初期実装であり、複数geoノードを持つ複雑なシーンでの妥当性は未検証
 - `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hip / scene_doctor_demo.hipの4シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
 - HDAのPythonModuleは開発中の事故防止のため毎回scene_doctorパッケージを強制リロードする（本番運用では削除しパフォーマンスを優先する余地あり）
+- `adapters/houdini_panel_launch.py`は実機Houdini環境でのみ動作確認可能なため、このセッションでは自動テスト対象外（別セッションで実機検証予定）。`hou.qt.mainWindow()`を親にしたフローティング表示という簡易実装に留めており、`hou.ui.curDesktop()`経由の正式なタブドッキングへの統合可否・ネットワークエディタのフレーミング処理（`homeToSelection()`）の実際の挙動は未検証
 
 ## Design Decisions
 
@@ -148,6 +182,7 @@ black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py t
 - **自動修正は行わずリネーム候補の提示に留める** — ジオメトリの自動修正は意図しない形状変化のリスクが高いため（[ADR-0003](docs/adr/0003-no-auto-fix.md)）
 - **非多様体判定は「3枚以上が共有するエッジ」のみを対象とする** — 実装当初は「2枚以外」を非多様体としていたが、TDDで開いた面（境界エッジ、1枚のみ共有）を含む正常なジオメトリのテストを書いたところ誤検出することが判明したため修正した。CGの標準用語でも境界エッジと非多様体エッジは区別されるべき、という判断
 - **YAML読込は`yaml.safe_load`のみ使用** — 任意コード実行を防ぐ多層防御として（SEC-001）
+- **PySide6パネルもPorts & Adaptersで分離** — `panel_view_model.py`（DCC非依存）と`panel.py`（PySide6のみ、houは不使用、コールバック注入）に分離することで、Houdiniなしでも本物のPySide6ウィジェットとしてTDDできるようにするため（[ADR-0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md)）
 
 ## セキュリティに関する注意
 
