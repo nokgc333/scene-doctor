@@ -13,6 +13,8 @@ dependencies = [
 dev = [
     "pytest>=9.0.3",
     "pytest-cov>=5.0,<6",
+    "pytest-qt>=4.4,<5",
+    "PySide6>=6.7,<7",
     "black>=24.0",
     "flake8>=7.1",
     "isort>=5.13",
@@ -51,4 +53,5 @@ pythonpath = ["."]
 [tool.coverage.run]
 # adapters/ は hou がない環境では実行できないため、CIのカバレッジ計測から除外する
 # （hda/・pdg/ 同様、実機でのみ検証可能。仕様書§11.2参照）。
+# houdini_panel_launch.py も同様にhou依存のため除外する（ADR-0007参照）。
 omit = ["scene_doctor/adapters/*"]
