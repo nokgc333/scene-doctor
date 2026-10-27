@@ -1,1 +1,3 @@
-"""Scene Doctor: Houdiniシーンのジオメトリ欠陥・ノード構造・命名規則を自動検出するツール。"""
+"""Scene Doctor: Houdini scene checks."""
+
+__version__ = "0.2.0"
