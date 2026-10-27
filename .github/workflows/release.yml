@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip PyYAML
+      - name: Check that the tag, the version and the changelog agree
+        run: |
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match version $VERSION"; exit 1
+          fi
+          grep -q "^## \[$VERSION\]" CHANGELOG.md || { echo "CHANGELOG.md has no entry for $VERSION"; exit 1; }
+      - name: Build the release zip
+        run: python scripts/build_release.py dist
+      - name: Smoke test the zip (no Houdini needed)
+        run: |
+          mkdir smoke && unzip -q dist/*.zip -d smoke
+          cd smoke/scene-doctor-*
+          python scene_doctor_cli.py --list-rules
+          python install_package.py --prefs ../prefs
+          test -f ../prefs/packages/scene_doctor.json
+      - name: Create the release from the changelog entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '$0 ~ "^## \\["v"\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          (cd dist && sha256sum *.zip > SHA256SUMS.txt)
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS.txt --title "$GITHUB_REF_NAME" --notes-file notes.md

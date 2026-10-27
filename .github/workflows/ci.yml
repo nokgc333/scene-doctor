@@ -7,16 +7,22 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: "Qt の実行ライブラリ（PySide6 が libEGL などを必要とする）"
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
       - run: python -m pip install --upgrade pip setuptools
       - run: pip install -e ".[dev]"
@@ -43,3 +49,22 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - run: pip-audit
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip PyYAML uv
+      - name: The lock file matches pyproject.toml
+        run: uv lock --check
+      - name: Build the release zip and install it as a package
+        run: |
+          python scripts/build_release.py dist
+          mkdir smoke && unzip -q dist/*.zip -d smoke
+          cd smoke/scene-doctor-*
+          python scene_doctor_cli.py --list-rules
+          python install_package.py --prefs ../prefs
+          test -f ../prefs/packages/scene_doctor.json
