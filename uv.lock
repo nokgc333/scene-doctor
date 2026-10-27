@@ -1440,6 +1440,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "black" },
+    { name = "certifi" },
     { name = "flake8" },
     { name = "isort" },
     { name = "jsonschema" },
@@ -1459,6 +1460,7 @@ usd = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0" },
+    { name = "certifi", marker = "extra == 'dev'", specifier = ">=2026.10.19" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=7.1" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.13" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.20" },

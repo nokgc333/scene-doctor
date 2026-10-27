@@ -183,7 +183,7 @@ class TestLoadScene:
 
         module.load_scene(Path("/proj/scene.hip"))
 
-        assert hou.hipFile.loads == [("/proj/scene.hip", {"suppress_save_prompt": True})]
+        assert hou.hipFile.loads == [(str(Path("/proj/scene.hip")), {"suppress_save_prompt": True})]
 
     def test_the_geo_node_with_the_display_flag_is_chosen(self) -> None:
         module, _ = self._load([self._geo("a", False), self._geo("b", True)])

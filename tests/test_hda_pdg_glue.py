@@ -253,8 +253,10 @@ class TestPdgScripts:
 
         _run_pdg("run_scene_doctor_source.py", item)
 
-        assert calls[0]["command"][0].endswith("bin/hython")
-        assert calls[0]["command"][calls[0]["command"].index("--hip") + 1] == "/shots/a b.hip"
+        assert Path(calls[0]["command"][0]).parts[-2:-1] == ("bin",)
+        assert calls[0]["command"][calls[0]["command"].index("--hip") + 1] == str(
+            Path("/shots") / "a b.hip"
+        )
         assert "shell" not in calls[0] or calls[0]["shell"] is False
         assert item.ints["scd_exitcode"] == 1
         assert item.outputs == [(str(tmp_path / "reports" / "a b_hip_report.json"), "file/json")]

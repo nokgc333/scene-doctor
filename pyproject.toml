@@ -23,6 +23,7 @@ dev = [
     "pip-audit>=2.7",
     "types-PyYAML",
     "jsonschema>=4.20",
+    "certifi>=2026.10.19",
     "usd-core>=25.11",
 ]
 
