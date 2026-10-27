@@ -46,7 +46,7 @@ CHECK hda_has_no_hardcoded_user_path PASS
 
 | Houdini | Python | 実施 | 結果 |
 | --- | --- | --- | --- |
-| 22.0.466 | 3.13.10 | 2026-10-28 | 9/9 PASS(この記録) |
+| 22.0.466 | 3.13.10 | 2026-10-28 | 16/16 PASS(この記録。追加した品質・参照・LOP の検査を含む) |
 | 22.0.429 | 3.13 | 2026-09(README「実機検証結果」) | 手動で、ジオメトリ・ノード・命名・HDA・PDG・パネルを確認 |
 | 19.5 / 20.0 / 20.5 / 21.0 | - | 未実施 | この環境に、インストールされていない。版を足すときは、上の手順を実行し、このフォルダに `houdini-<版>.md` を追加し、この表に 1 行足す |
 
@@ -55,3 +55,18 @@ CHECK hda_has_no_hardcoded_user_path PASS
 1. **`hda/SceneDoctor.hdalc` に、パラメーターが無かった**: リポジトリの HDA は、パラメーターインターフェース(トグル・ボタン・結果)を持たず、PythonModule のコールバックが `evalParm` で失敗した。`hda/build_hda.py` で、パラメーターとボタンつきの HDA を、一から作り直せるようにした(HDA はバイナリで差分が読めないため、作るスクリプトを正本にする)。
 2. **`hython` に PyYAML が入っていない**: 開発中は、リポジトリの venv の場所を決め打ちして回避していた(利用者のパスが HDA に埋め込まれていた)。配布物は、PyYAML を同梱する(SD-06)。
 3. **HDA の PythonModule と PDG のスクリプトに、特定の利用者のホームフォルダが書かれていた**: 環境変数 `SCENE_DOCTOR_HOME` と、`$HFS/bin/hython` に置き換えた(テストで、`/Users/` を含まないことを強制)。
+4. **`PYTHONPATH` に `usd-core` を含む venv を渡すと、Houdini の `pxr` と衝突する**: `RuntimeError: extension class wrapper for base class ... UsdTyped has not been created yet` になり、`--lop` が失敗した。`hython` には、PyYAML だけを置いたフォルダを渡す(`pxr` は Houdini のものを使う)。
+5. **`defaultPrim` が存在しない Prim を指していても、`HasDefaultPrim()` は真になる**: サンプルの USD で見つかり、検査を足した(`usd_default_prim`)。
+
+## 追加した検査の実機結果(品質・参照・LOP)
+
+`scripts/verify_houdini.py` の後半。UV を削除した 2 つの box の結合(重複した点)、存在しないキャッシュを指す `file` ノード、`/stage/sphere1`(LOP)で確かめた。
+
+```
+CHECK quality_cli_exits_with_violations_found PASS exit=1
+CHECK missing_uv_is_detected PASS ['duplicate_point', 'hardcoded_path', 'missing_file', 'missing_uv', 'unconnected_node']
+CHECK duplicate_point_is_detected PASS
+CHECK missing_cache_file_is_detected PASS
+CHECK lop_stage_is_inspected PASS exit=1 ['usd_default_prim']
+CHECK lop_default_prim_is_checked PASS
+```

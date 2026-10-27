@@ -1,0 +1,5 @@
+hip_path,check_type,target_path,message,severity,rename_candidate
+broken_asset.usda,usd_default_prim,(stage),the default prim 'Missing' does not exist on the stage,warning,
+broken_asset.usda,usd_unresolved_reference,(stage),unresolved dependency: ~/dev/scene-doctor/docs/samples/props_that_do_not_exist.usda,error,
+broken_asset.usda,usd_no_material,/World/Body,mesh has no material binding,warning,
+broken_asset.usda,usd_no_uv,/World/Body,mesh has no 'st' primvar (UV),warning,
