@@ -21,6 +21,7 @@ dev = [
     "mypy>=1.11",
     "pip-audit>=2.7",
     "types-PyYAML",
+    "jsonschema>=4.20",
 ]
 
 [build-system]
@@ -51,7 +52,6 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.coverage.run]
-# adapters/ は hou がない環境では実行できないため、CIのカバレッジ計測から除外する
-# （hda/・pdg/ 同様、実機でのみ検証可能。仕様書§11.2参照）。
-# houdini_panel_launch.py も同様にhou依存のため除外する（ADR-0007参照）。
-omit = ["scene_doctor/adapters/*"]
+# hou_adapter.py は、偽の hou(tests/fake_hou.py)の契約テストで計測する。
+# houdini_panel_launch.py は hou.qt に依存するため、実機でのみ検証できる(ADR-0007)。
+omit = ["scene_doctor/adapters/houdini_panel_launch.py"]
