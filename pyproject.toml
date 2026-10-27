@@ -1,6 +1,6 @@
 [project]
 name = "scene-doctor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Houdiniシーンのジオメトリ欠陥・ノード構造・命名規則を自動検出するツール"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,7 @@ dev = [
     "pip-audit>=2.7",
     "types-PyYAML",
     "jsonschema>=4.20",
+    "certifi>=2026.10.19",
     "usd-core>=25.11",
 ]
 

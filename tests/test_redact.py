@@ -107,4 +107,5 @@ def test_without_the_option_the_full_path_is_kept(
 
     cli.main(["--hip", str(hip), "--rules", str(rules), "--out", str(out)])
 
-    assert str(tmp_path) in out.with_suffix(".json").read_text(encoding="utf-8")
+    payload = json.loads(out.with_suffix(".json").read_text(encoding="utf-8"))
+    assert payload["hip_path"].startswith(str(tmp_path))

@@ -1,0 +1,9 @@
+{
+    "enable": true,
+    "path": "@SCENE_DOCTOR_HOME@",
+    "env": [
+        {"SCENE_DOCTOR_HOME": "@SCENE_DOCTOR_HOME@"},
+        {"PYTHONPATH": {"method": "prepend", "value": "@SCENE_DOCTOR_HOME@/vendor"}},
+        {"PYTHONPATH": {"method": "prepend", "value": "@SCENE_DOCTOR_HOME@"}}
+    ]
+}
