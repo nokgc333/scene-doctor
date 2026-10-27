@@ -17,7 +17,9 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
+import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,10 +35,21 @@ from scene_doctor.checks.nodes import (
     check_unconnected_nodes,
     check_unused_bypassed_nodes,
 )
+from scene_doctor.checks.quality import (
+    check_duplicate_points,
+    check_flipped_normals,
+    check_missing_uvs,
+)
+from scene_doctor.checks.references import (
+    PathExists,
+    check_cache_paths,
+    check_hda_versions,
+)
 from scene_doctor.interfaces import GeometryLike, NodeLike
 from scene_doctor.report import (
     FAIL_ON_CHOICES,
     SceneReport,
+    Violation,
     exceeds_threshold,
     redacted,
     report_to_common_json,
@@ -82,6 +95,19 @@ class CheckOptions:
     recurse_into_subnets: bool = True
 
 
+def _quality_violations(geo: GeometryLike) -> list[Violation]:
+    """UV・法線・重複点の検査。ジオメトリがそのメソッドを持たないとき(古いアダプタなど)は、その検査を飛ばす。"""
+    violations: list[Violation] = []
+    prims = list(geo.prims())
+    if prims and hasattr(prims[0], "has_uv"):
+        violations.extend(check_missing_uvs(geo))
+    if prims and hasattr(prims[0], "normal") and hasattr(prims[0], "centroid"):
+        violations.extend(check_flipped_normals(geo))
+    if hasattr(geo, "point_positions"):
+        violations.extend(check_duplicate_points(geo))  # type: ignore[arg-type]
+    return violations
+
+
 def build_report(
     hip_path: str,
     geo: GeometryLike,
@@ -93,6 +119,9 @@ def build_report(
     ngon_threshold: int = DEFAULT_NGON_THRESHOLD,
     zero_area_epsilon: float = DEFAULT_ZERO_AREA_EPSILON,
     recurse_into_subnets: bool = True,
+    enable_quality: bool = True,
+    enable_references: bool = True,
+    path_exists: PathExists = os.path.exists,
 ) -> SceneReport:
     """有効化されたチェックを実行し、結果を1つのSceneReportに集約する。
 
@@ -111,6 +140,13 @@ def build_report(
         report.violations.extend(check_ngons(geo, threshold=ngon_threshold))
         report.violations.extend(check_zero_area(geo, epsilon=zero_area_epsilon))
 
+    if enable_quality:
+        report.violations.extend(_quality_violations(geo))
+
+    if enable_references:
+        report.violations.extend(check_cache_paths(network, path_exists, recurse_into_subnets))
+        report.violations.extend(check_hda_versions(network, recurse_into_subnets))
+
     if enable_nodes:
         report.violations.extend(
             check_unconnected_nodes(network, recurse_into_subnets=recurse_into_subnets)
@@ -125,6 +161,7 @@ def build_report(
     return report
 
 
+SKIPPABLE_CHECKS = ["geometry", "quality", "references", "nodes", "naming"]
 FORMAT_CHOICES = ["csv", "json", "common", "both", "all"]
 OUTPUT_SUFFIXES = {"json": ".json", "csv": ".csv", "common": ".common.json"}
 FORMATS_WRITTEN = {
@@ -185,6 +222,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--hip", help="検証対象の.hipファイルパス")
+    parser.add_argument("--usd", help="検証対象の USD ファイル(Houdini 不要。usd-core が要る)")
+    parser.add_argument(
+        "--lop", help="--hip の中の LOP ノードのパス(例: /stage/out)。その USD ステージを検査する"
+    )
     parser.add_argument(
         "--rules", default=None, help="命名規則YAMLのパス(既定: 配布物の rules/default.yaml)"
     )
@@ -204,6 +245,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--list-rules", action="store_true", help="命名規則の一覧を表示して終わる(Houdini 不要)"
+    )
+    parser.add_argument(
+        "--skip",
+        action="append",
+        choices=SKIPPABLE_CHECKS,
+        default=[],
+        help="実行しない検査(geometry / quality / references / nodes / naming)。複数指定できる",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--quiet", "-q", action="store_true", help="標準出力を抑える")
@@ -256,11 +304,89 @@ def _load(hip_path: Path) -> tuple[GeometryLike, NodeLike] | int:
     return geo, network
 
 
+def _stage_report(args: argparse.Namespace) -> SceneReport | int:
+    """`--usd`(ファイル。Houdini 不要)/ `--lop`(.hip の LOP ノード)の USD ステージを検査する。"""
+    try:
+        from scene_doctor.checks.usd_stage import (  # noqa: PLC0415
+            check_usd_stage,
+            open_stage,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name is None or not exc.name.startswith("pxr"):
+            raise
+        print("Error: USD checks need the 'pxr' module (pip install usd-core)", file=sys.stderr)
+        return EXIT_HOU_UNAVAILABLE
+    try:
+        if args.usd:
+            subject, stage = args.usd, open_stage(args.usd)
+        else:
+            from scene_doctor.adapters.hou_adapter import (  # noqa: PLC0415
+                load_lop_stage,
+            )
+
+            subject = args.hip
+            stage = load_lop_stage(Path(args.hip), args.lop)
+    except ModuleNotFoundError as exc:
+        if exc.name != "hou":
+            raise
+        print(_hou_unavailable_message(), file=sys.stderr)
+        return EXIT_HOU_UNAVAILABLE
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - pxr の Tf.ErrorException など、開けない理由を、そのまま伝える
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_PARAMETER
+    report = SceneReport(subject, _now())
+    report.violations.extend(check_usd_stage(stage))
+    return report
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _scene_report(
+    args: argparse.Namespace,
+    hip_path: Path,
+    naming_rules: list[NamingRule],
+    note: Callable[[str], None],
+) -> SceneReport | int:
+    note(f"opening {hip_path}")
+    loaded = _load(hip_path)
+    if isinstance(loaded, int):
+        return loaded
+    geo, network = loaded
+    note("running checks")
+    try:
+        return build_report(
+            str(hip_path),
+            geo,
+            network,
+            naming_rules,
+            enable_geometry="geometry" not in args.skip,
+            enable_quality="quality" not in args.skip,
+            enable_references="references" not in args.skip,
+            enable_nodes="nodes" not in args.skip,
+            enable_naming="naming" not in args.skip,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_PARAMETER
+
+
+def _default_out(args: argparse.Namespace) -> Path:
+    if args.out:
+        return Path(args.out)
+    source = Path(args.usd or args.hip)
+    return source.with_name(f"{source.stem}_report")
+
+
 def main(argv: list[str] | None = None) -> int:
     """hython上で実行する本番エントリポイント。
 
     実hou呼び出し（.hipを開く・対象ノードを取得する）は scene_doctor.adapters.hou_adapter に委譲する。
     Houdini の外で実行しても、スタックトレースではなく、案内つきの終了コード 15 で終わる。
+    `--usd` は、Houdini なしで USD ファイルを検査する。
     """
     args = _build_arg_parser().parse_args(argv)
     rules_path = Path(args.rules) if args.rules else default_rules_path()
@@ -272,13 +398,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list_rules:
         return _list_rules(rules_path)
-    if not args.hip:
-        print("Error: --hip is required (or use --list-rules)", file=sys.stderr)
+    if not (args.hip or args.usd):
+        print("Error: --hip or --usd is required (or use --list-rules)", file=sys.stderr)
+        return EXIT_INVALID_PARAMETER
+    if args.lop and not args.hip:
+        print("Error: --lop needs --hip", file=sys.stderr)
         return EXIT_INVALID_PARAMETER
 
-    hip_path = Path(args.hip)
-    if not hip_path.exists():
-        print(f"Error: '{hip_path}' does not exist", file=sys.stderr)
+    source = Path(args.usd or args.hip)
+    if not source.exists():
+        print(f"Error: '{source}' does not exist", file=sys.stderr)
         return EXIT_HIP_NOT_FOUND
 
     try:
@@ -288,27 +417,19 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_RULE_FILE_ERROR
     note(f"loaded {len(naming_rules)} naming rule(s) from {rules_path}")
 
-    out_path = Path(args.out) if args.out else hip_path.with_name(f"{hip_path.stem}_report")
+    out_path = _default_out(args)
     existing = [p for p in output_files(out_path, args.format) if p.exists()]
     if existing and not args.force:
         print(f"Error: '{existing[0]}' already exists (use --force to overwrite)", file=sys.stderr)
         return EXIT_OUTPUT_EXISTS
 
-    note(f"opening {hip_path}")
-    loaded = _load(hip_path)
-    if isinstance(loaded, int):
-        return loaded
-    geo, network = loaded
-
-    note("running checks")
-    try:
-        report = build_report(str(hip_path), geo, network, naming_rules)
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return EXIT_INVALID_PARAMETER
-
-    if args.redact_home:
-        report = redacted(report, str(Path.home()))
+    if args.usd or args.lop:
+        built = _stage_report(args)
+    else:
+        built = _scene_report(args, source, naming_rules, note)
+    if isinstance(built, int):
+        return built
+    report = redacted(built, str(Path.home())) if args.redact_home else built
 
     try:
         write_report(report, out_path, args.format)

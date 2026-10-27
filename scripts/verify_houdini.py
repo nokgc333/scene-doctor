@@ -38,6 +38,48 @@ def build_scene(hip_path: Path) -> None:
     hou.hipFile.save(str(hip_path))
 
 
+def build_quality_scene(hip_path: Path) -> None:
+    """UV なし・重複した点・存在しないキャッシュと、LOP(Solaris)のステージを持つシーン。"""
+    hou.hipFile.clear(suppress_save_prompt=True)
+    geo = hou.node("/obj").createNode("geo", "quality_geo")
+    box_a = geo.createNode("box", "box_a")
+    box_b = geo.createNode("box", "box_b")
+    merge = geo.createNode("merge", "merge_boxes")
+    merge.setInput(0, box_a)
+    merge.setInput(1, box_b)
+    no_uv = geo.createNode("attribdelete", "drop_uv")
+    no_uv.setInput(0, merge)
+    no_uv.parm("vtxdel").set("uv")
+    no_uv.setDisplayFlag(True)
+    no_uv.setRenderFlag(True)
+    cache = geo.createNode("file", "missing_cache")
+    cache.parm("file").set("/definitely/not/here/cache.bgeo.sc")
+    hou.node("/stage").createNode("sphere", "sphere1")
+    hou.hipFile.save(str(hip_path))
+
+
+def verify_extended_checks(work: Path) -> None:
+    import scene_doctor_cli
+
+    hip = work / "quality.hip"
+    build_quality_scene(hip)
+    code = scene_doctor_cli.main(["--hip", str(hip), "--out", str(work / "q")])
+    payload = json.loads((work / "q.json").read_text(encoding="utf-8"))
+    kinds = {v["check_type"] for v in payload["violations"]}
+    check("quality_cli_exits_with_violations_found", code == 1, f"exit={code}")
+    check("missing_uv_is_detected", "missing_uv" in kinds, str(sorted(kinds)))
+    check("duplicate_point_is_detected", "duplicate_point" in kinds, "")
+    check("missing_cache_file_is_detected", "missing_file" in kinds, "")
+
+    lop_code = scene_doctor_cli.main(
+        ["--hip", str(hip), "--lop", "/stage/sphere1", "--out", str(work / "l")]
+    )
+    lop = json.loads((work / "l.json").read_text(encoding="utf-8"))
+    lop_kinds = {v["check_type"] for v in lop["violations"]}
+    check("lop_stage_is_inspected", lop_code in (0, 1), f"exit={lop_code} {sorted(lop_kinds)}")
+    check("lop_default_prim_is_checked", "usd_default_prim" in lop_kinds, "")
+
+
 def main() -> None:
     print(f"HOUDINI_VERSION {hou.applicationVersionString()}")
     print(f"PYTHON_VERSION {sys.version.split()[0]}")
@@ -97,6 +139,7 @@ def main() -> None:
             .contents(),
             "",
         )
+        verify_extended_checks(work)
 
 
 main()

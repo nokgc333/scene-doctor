@@ -35,3 +35,37 @@ class NodeLike(Protocol):
     def is_bypassed(self) -> bool: ...
     def children(self) -> Sequence["NodeLike"]: ...
     def set_name(self, new_name: str) -> None: ...
+
+
+class UvPrimLike(Protocol):
+    def has_uv(self) -> bool:
+        """プリミティブの頂点(または点)に UV(`uv` 属性)があるか。"""
+        ...
+
+
+class NormalPrimLike(Protocol):
+    def normal(self) -> tuple[float, float, float]:
+        """面の法線(長さは問わない)。"""
+        ...
+
+    def centroid(self) -> tuple[float, float, float]:
+        """面の重心。"""
+        ...
+
+
+class PointGeometryLike(Protocol):
+    def point_positions(self) -> Sequence[tuple[float, float, float]]:
+        """全ての点の位置。"""
+        ...
+
+
+class FileNodeLike(Protocol):
+    def file_paths(self) -> Sequence[tuple[str, str, str]]:
+        """ファイルを参照するパラメーターの(パラメーター名, 書かれた文字列, 変数を展開した実際のパス)。"""
+        ...
+
+
+class HdaNodeLike(Protocol):
+    def hda_version(self) -> tuple[str, str, str] | None:
+        """HDA のインスタンスなら(HDA 名, 使っている版, 読み込まれている最新の版)。HDA でなければ None。"""
+        ...
