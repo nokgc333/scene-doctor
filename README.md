@@ -1,70 +1,135 @@
 # Scene Doctor
 
-Houdiniシーンのジオメトリ欠陥（非多様体・N-gon・ゼロ面積）・ノード構造（未接続・未使用）・命名規則違反を自動検出するツール。
+Houdiniシーンのジオメトリ欠陥・ノード構造・命名規則・参照(キャッシュ/HDA)・USDステージを自動検出するツール。
+
+> **English summary**
+> Scene Doctor finds problems in Houdini scenes before they reach the render farm: non-manifold/N-gon/zero-area geometry, missing UVs, flipped normals, duplicate points, missing or hard-coded cache paths, outdated HDAs, unconnected nodes, naming-rule violations, and USD (Solaris) stage issues.
+> It runs from `hython` (CLI), as an HDA, as a docked PySide6 panel, or in bulk through PDG, and writes CSV / JSON plus a shared "common report" JSON that a publish gate can consume.
+> The checks are pure Python behind a ports-and-adapters boundary, so most of the logic is tested without Houdini; the `hou` adapter is verified on a real Houdini 22.0.466 ([record](docs/verification/houdini-22.0.466.md)).
+> Install: unzip the release, run `python install_package.py --prefs <Houdini user prefs dir>`, restart Houdini. MIT licensed.
+
+![Scene Doctor のパネル](docs/images/panel.png)
+
+*パネルの表示(本物の PySide6 ウィジェットをヘッドレスで描画したもの。`python scripts/render_panel_screenshot.py` で再生成できる)。*
 
 ## 目的・背景
 
-複数アーティストが触るHoudiniシーンは、非多様体ジオメトリ・ゼロ面積ポリゴン・未接続ノード・命名違反が静かに蓄積し、レンダー直前で発覚して手戻りを生みます。Scene Doctorはこれをバッチで自動検出・レポート化します。
+複数アーティストが触るHoudiniシーンは、非多様体ジオメトリ・ゼロ面積ポリゴン・UVの欠落・切れたキャッシュパス・未接続ノード・命名違反が静かに蓄積し、レンダー直前で発覚して手戻りを生む。
+Scene Doctorは、これをバッチで自動検出し、レポートにする。
 
-詳細な要件定義・設計判断は [docs/要件定義書.md](docs/要件定義書.md) / [docs/仕様書.md](docs/仕様書.md) を参照してください。
+要件定義・設計判断は [docs/要件定義書.md](docs/要件定義書.md) / [docs/仕様書.md](docs/仕様書.md) を参照。
 
-> このツールは `~/3dcg-dev/houdini_dev` の `tornado_00.hiplc` / `spiderweb_v1.hip` / `v2.hip`（過去の習作HDA）を「検出対象の壊れたシーン」として再利用する設計です。同ディレクトリの `houdini-mcp`（`oculairmedia/houdini-mcp`のクローン）はScene Doctorの実装に一切使用していません。
+## 検査の一覧
 
-## アーキテクチャ（Ports & Adapters）
+| 種類 | 検査(`check_type`) | 重さ | 内容 |
+| --- | --- | --- | --- |
+| ジオメトリ | `nonmanifold` | error | 3枚以上が共有するエッジ |
+| ジオメトリ | `ngon` | warning | 辺の数が閾値を超えるポリゴン |
+| ジオメトリ | `zero_area` | error | 面積がほぼ 0 のポリゴン |
+| 品質 | `missing_uv` | warning | UV が無いプリミティブ |
+| 品質 | `flipped_normal` | warning | 法線が内向きのプリミティブ(重心基準。4面以上) |
+| 品質 | `duplicate_point` | warning | 同じ位置の点 |
+| 参照 | `missing_file` | error | 存在しないファイルを指すパラメーター(`$HIP` などを展開して確認) |
+| 参照 | `hardcoded_path` | warning | 変数を使わない絶対パス |
+| 参照 | `outdated_hda` | warning | 最新ではない版の HDA |
+| ノード | `unconnected_node` / `unused_bypassed` | warning | 出力が無いノード / バイパスされたままのノード |
+| 命名 | `naming` | warning | 命名規則(YAML)に合わない名前。リネーム候補つき |
+| USD | `usd_default_prim` | warning | 既定 Prim が無い、または存在しない Prim を指す |
+| USD | `usd_unresolved_reference` | error | 解決できない参照・サブレイヤー |
+| USD | `usd_no_material` / `usd_no_uv` | warning | マテリアルのバインドが無い / UV(`st`)が無いメッシュ |
 
-検証ロジック（`checks/`, `rules.py`, `report.py`, CLIオーケストレーション）は `hou` に依存しない純粋なPythonで実装し、実`hou`呼び出しは `scene_doctor/adapters/hou_adapter.py` のみに閉じ込めています（[ADR-0001](docs/adr/0001-ports-and-adapters.md)）。これにより、**Houdiniがインストールされていない環境でも大部分のロジックをTDDで検証できます**。
+ジオメトリの自動修正はしない。リネーム候補を示すだけに留める([ADR-0003](docs/adr/0003-no-auto-fix.md))。
 
-```
-scene_doctor/
-├── interfaces.py        # GeometryLike / NodeLike Protocol
-├── adapters/
-│   ├── hou_adapter.py            # 実houへの依存はここに閉じ込める（hython専用、CIでは検証不可）
-│   └── houdini_panel_launch.py   # PySide6パネルの実Houdiniドッキング（同上、CIでは検証不可）
-├── checks/
-│   ├── geometry.py       # 非多様体・N-gon・ゼロ面積
-│   ├── naming.py         # 命名規則違反・リネーム候補
-│   └── nodes.py          # 未接続・未使用（バイパス）ノード
-├── ui/
-│   ├── panel_view_model.py  # DCC非依存: SceneReport→表示行データの変換・フィルタ・ソート
-│   └── panel.py              # PySide6のQDockWidget。houは一切importしない（DI疎結合）
-├── rules.py               # 命名規則YAML読込
-└── report.py              # CSV/JSON出力
-scene_doctor_cli.py         # hythonから起動するCLIエントリポイント
-```
+## 動作環境
 
-HDA（パラメータUIのみ）に加え、Houdini本体にドッキングするリッチなPySide6カスタムパネル
-（違反一覧のツリー表示・クリックでのノード選択ジャンプ・severity/categoryフィルタ）を
-`scene_doctor/ui/`に実装している。GUI層にもPorts & Adaptersと同じ思想を適用し、
-`panel_view_model.py`（DCC非依存の純粋関数）と`panel.py`（PySide6のみ、houは不使用）を
-コールバック注入で疎結合にすることで、`QT_QPA_PLATFORM=offscreen`のヘッドレス環境でも
-本物のPySide6ウィジェットとして`pytest-qt`でTDDできる（[ADR-0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md)）。
+| 項目 | 内容 |
+| --- | --- |
+| Houdini | **22.0.466: 実機で検証済み**(`scripts/verify_houdini.py` の 15 項目、[記録](docs/verification/houdini-22.0.466.md))。22.0.429: 手動で確認([履歴](docs/verification/history-2026-09.md))。19.5〜21.0: 未検証(この環境に無い) |
+| Python | 3.11 / 3.12 / 3.13(CI で確認)。Houdini 22 の `hython` は 3.13 |
+| OS | macOS: 実機(Houdini)で検証。Linux / macOS / Windows: CI でテストを実行(Houdini なし) |
+| 依存 | PyYAML(配布物に同梱)。`--usd` には `usd-core`(任意。Houdini の `hython` では、Houdini 自身の `pxr` を使う) |
+| Houdini ライセンス | Steam 版 Houdini Indie は、Steam を起動してから `hython` を使う |
 
-## 技術スタック
+## インストール
 
-- Python 3.11+ / hython（Houdini 22.0 Indie同梱で実機検証済み。仕様書上のターゲットは20.5だが、22.0でも動作を確認）
-- PyYAML（`yaml.safe_load`のみ使用）
-- PySide6（Houdini同梱の`hou.qt`経由で実機利用、開発・テストは`pip install PySide6`で導入）
-- pytest / pytest-cov / pytest-qt（`QT_QPA_PLATFORM=offscreen`でPySide6ウィジェットをヘッドレステスト） / mypy(strict, adaptersのみhouスタブ不在のため一部緩和) / black / isort / flake8 / pip-audit
+### Houdini の package として(利用者向け)
 
-## インストール（開発・テスト用、Houdini不要）
+1. [Releases](https://github.com/nokgc333/scene-doctor/releases) から `scene-doctor-<版>.zip` を取得し、好きな場所に展開する(`SHA256SUMS.txt` で確認できる)。
+2. 展開したフォルダで、Houdini のユーザー設定フォルダを指定して実行する。標準ライブラリだけで動くので、どの Python 3 でもよい。
+
+   ```bash
+   python install_package.py --prefs ~/Library/Preferences/houdini/22.0
+   ```
+
+   | OS | ユーザー設定フォルダの例 |
+   | --- | --- |
+   | macOS | `~/Library/Preferences/houdini/22.0` |
+   | Windows | `~/Documents/houdini22.0` |
+   | Linux | `~/houdini22.0` |
+
+3. Houdini を再起動する。`$SCENE_DOCTOR_HOME` が設定され、`hython` から `scene_doctor` を import でき、HDA(`Scene Doctor`)が SOP のノードとして現れる。
+
+外すときは、`<ユーザー設定フォルダ>/packages/scene_doctor.json` を消す。
+
+### 開発・テスト用(Houdini 不要)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest --cov-fail-under=80
+pip install -e ".[dev]"      # USD の検査も試すなら usd-core も入る
+pytest --cov-fail-under=95
 ```
 
-## 使用方法（実機・hython専用）
+ロックファイルは `uv.lock`(`uv sync --extra dev`)。
+
+## 使い方
+
+### コマンドライン(`hython`)
 
 ```bash
-hython scene_doctor_cli.py --hip path/to/scene.hip --rules rules/default.yaml --format both
+hython scene_doctor_cli.py --hip path/to/scene.hip --format all
 ```
 
-終了コード: `0`=違反なし / `1`=違反あり / `10`〜`14`=エラー系（詳細は [docs/仕様書.md §5.6](docs/仕様書.md)）
+| オプション | 内容 |
+| --- | --- |
+| `--hip` / `--usd` / `--lop` | 検査する `.hip` / USD ファイル(Houdini 不要)/ `.hip` の中の LOP ノード(例: `/stage/out`) |
+| `--rules` | 命名規則の YAML(既定: `rules/default.yaml`。`--list-rules` で一覧) |
+| `--out` / `--format` | 出力先と形式: `csv` / `json` / `common`(共通レポート)/ `both` / `all` |
+| `--fail-on` | 終了コード 1 にする重さ: `warning`(既定)/ `error` / `never` |
+| `--skip` | 検査の種類を外す: `geometry` / `quality` / `references` / `nodes` / `naming` |
+| `--force` | 既存のレポートを上書きする(無いと、終了コード 16) |
+| `--redact-home` | レポートのホームフォルダ(利用者名)を `~` にして、共有しやすくする |
+| `--quiet` / `--verbose` | 標準出力を抑える / 進捗を標準エラーに出す |
 
-### PySide6カスタムパネルの起動（実機・Houdini本体専用）
+Houdini なしで USD を検査する例と、その出力は [docs/samples](docs/samples) にある。
 
-Houdiniの Python Shell、または shelf tool のスクリプトから以下を実行するとパネルが起動する。
+```bash
+python scene_doctor_cli.py --usd docs/samples/broken_asset.usda --format all --redact-home
+```
+
+終了コード:
+
+| コード | 意味 |
+| --- | --- |
+| 0 | 違反なし(`--fail-on` の水準で) |
+| 1 | 違反あり |
+| 10 | 指定のファイルが無い |
+| 11 | 不正なパラメーター(例: geo ノードが無いシーン) |
+| 12 | 対象のノードが SOP ネットワークではない |
+| 13 | 命名規則のファイルが無い・不正 |
+| 14 | レポートを書き込めない |
+| 15 | Houdini の `hou` が無い(`hython` で実行する) |
+| 16 | レポートが既にある(`--force` で上書き) |
+
+`--format common` は、他のツールが読める共通のレポート(`schema_version` / `tool` / `findings[]`)を出す。スキーマは [docs/schema/common-report.schema.json](docs/schema/common-report.schema.json)。
+
+### HDA
+
+package を入れると、SOP に `Scene Doctor` が現れる。パラメーターで検査の種類・閾値を選び、「Run All Checks」で実行する。結果は `results` に出る。「Export CSV/JSON」で書き出し、「Apply Rename Candidates」で、命名のリネーム候補を適用する。
+HDA は、`hda/build_hda.py` で作る(`.hdalc` はバイナリで差分が読めないため、作るスクリプトを正本にする。[ADR-0005](docs/adr/0005-hda-subnet-base.md))。
+
+### PySide6 のパネル
+
+Houdini の Python Shell か shelf tool から起動する。
 
 ```python
 from scene_doctor.adapters.houdini_panel_launch import launch_panel
@@ -72,152 +137,90 @@ from scene_doctor.adapters.houdini_panel_launch import launch_panel
 panel = launch_panel()
 ```
 
-`launch_panel()`は`hou.qt.mainWindow()`を親にした`SceneDoctorPanel`（`QDockWidget`）を
-フローティング表示する。パネル上の「Run Checks」で現在の`/obj`配下の対象geoノードを検証し、
-違反一覧をツリー表示する。行をクリックすると対象ノードを選択・カレント化し、
-ネットワークエディタでフレーミングする。「Export CSV / Export JSON」で
-`export_path_edit`に入力したパス（空の場合は`$HIP/scene_doctor_report`）へ出力する。
+「Run Checks」で、違反を一覧にする。行をクリックすると、対象のノードを選択する。severity / category でフィルターでき、CSV / JSON に書き出せる。
 
-> **注意（メインスレッド制約）**: `launch_panel()`はQtウィジェットを生成するため、必ずHoudiniの
-> メインスレッド上（Python Shell・shelf tool・メニュー項目など）から呼び出すこと。バックグラウンド
-> スレッドから呼び出すとQtの内部ロックにより**Houdini自体がフリーズする**（実機検証で実際に発生・
-> 詳細は下記「実機検証結果」参照）。外部プロセスから安全に呼び出す必要がある場合は
-> `hdefereval.executeInMainThreadWithResult()`等でメインスレッドへマーシャリングすること。
+> **注意**: `launch_panel()` は、必ず Houdini のメインスレッドから呼ぶ。バックグラウンドのスレッドから呼ぶと、Houdini が固まる(実機で再現済み。外部のプロセスからは `hdefereval.executeInMainThreadWithResult()` を使う)。
 
-### PySide6パネル 実機検証結果（2026-09-08実施）
+### PDG(バッチ)
 
-Houdini本体（Houdini Indie 22.0.429）に実際にドッキングパネルを起動し、Run Checks・行クリックでの
-ノード選択ジャンプ・severity/categoryフィルタ・Export CSV/JSONの全機能を動作確認した（houdini_mcpの
-HTTPブリッジが接続不能だったため、hrpycへ直接rpyc接続し`hdefereval.executeInMainThreadWithResult()`
-経由でHoudini本体のメインスレッド上でパネルを操作する形で検証した）。
+`pdg/batch_topnet.hip` に、TOPs ネットワークがある。`.hip` を集め、`hython` で `scene_doctor_cli.py` を固定の引数で起動し、個別のレポートを集約する。
+cook は、Houdini の UI から手動で実行する([ADR-0006](docs/adr/0006-pdg-manual-cook-only.md))。スクリプトの可読なコピーは `pdg/*_source.py`。
 
-| 発見箇所 | 症状 | 原因 | 対応 |
-|---|---|---|---|
-| `launch_panel()`の呼び出しスレッド | Houdini本体が応答不能になった（再起動が必要になった） | rpycのバックグラウンドディスパッチスレッドから直接`launch_panel()`を呼び出し、QWidgetをメインスレッド以外で生成・表示してしまった | `hdefereval.executeInMainThreadWithResult()`でメインスレッドにマーシャリングして呼び出すよう検証方法を修正。通常のユーザー操作（Python Shell/shelf toolからの実行）は元々メインスレッド上で実行されるため、この問題は発生しない。READMEに注意書きとして明記 |
-| ノード探索範囲 | 意図的に壊した2つのgeoノードのうち、Displayフラグが立つ方（1つ）しか検査されなかった | 既知の制限事項として設計時から文書化済み（v1の単純化仕様）。実機で再現・再確認した | 対応不要（既知の制限として明記済み、[既知の制限事項](#既知の制限事項)参照） |
+## トラブルシューティング
 
-修正後、`/obj/geo1`配下に未接続ノード（`stray_sphere`）を仕込んだシーンで`Run Checks`を実行し、
-1件の`unconnected_node`違反を正しく検出・ツリー表示した。違反行をクリックすると
-`hou.selectedNodes()`が対象ノード1件を正しく返すことを確認し、`severity_filter`を`error`に
-切り替えると該当0件（実際にerror severityの違反が存在しないため）、`All`に戻すと2件（2つ目の
-未接続ノードを追加した状態）に正しく増減することを確認した。Export CSV/JSONも実際に
-`/tmp/`へファイルを書き出し、内容が`report_to_csv_rows`/`report_to_json`の出力と一致することを
-確認した。
+| 症状 | 原因 | 対処 |
+| --- | --- | --- |
+| `ModuleNotFoundError: hou` / 終了コード 15 | 普通の Python で実行している | `hython scene_doctor_cli.py ...` で実行する(`--list-rules` と `--usd` は不要) |
+| `SCENE_DOCTOR_HOME is not set` | package が登録されていない | 「インストール」の手順 2 を実行し、Houdini を再起動する |
+| `hython` で `No module named 'yaml'` | 開発用に、リポジトリをそのまま使っている | リリースの zip を使う(PyYAML 同梱)。開発中は、PyYAML だけを置いたフォルダを `PYTHONPATH` に渡す |
+| `--lop` で `UsdTyped has not been created yet` | `PYTHONPATH` の `usd-core` が、Houdini の `pxr` と衝突している | `PYTHONPATH` から `usd-core` を外す(`hython` では、Houdini 自身の `pxr` を使う) |
+| `--usd` で `pip install usd-core` と言われる | `pxr` が無い | `pip install usd-core`(Houdini の外で使うとき) |
+| 終了コード 16 | 同じ名前のレポートが既にある | `--force`、または `--out` を変える |
+| `hython` が、出力のあとも終了しない / `Address already in use` | Houdini の RPC サーバーの既知の挙動(害は無い) | 出力を確認したら、プロセスを止める |
+| `hython` がライセンスを取れない | Steam 版 Houdini Indie は、Steam が必要 | Steam を起動してから実行する |
+| パネルを出したら Houdini が固まった | メインスレッド以外から Qt を操作した | 上の「注意」を参照 |
 
-### 実機検証結果（2026-09-07実施、TC-023 / TC-024）
+## アーキテクチャ(Ports & Adapters)
 
-`hython`ネイティブ実行（Houdini 22.0.429、RPC非経由）で`tornado_00.hiplc` / `spiderweb_v1.hip` / `spiderweb_v2.hip`に対して実行し、以下3件の実データ特有のバグを発見・修正した。
-
-| 発見箇所 | 症状 | 原因 | 対応 |
-|---|---|---|---|
-| `is_display_flag_set`等 | `AttributeError: 'DopNode' object has no attribute 'isRenderFlagSet'` | DOP Network SOP配下のDOPノードにSOP専用フラグメソッドを呼んでいた | 対象ノードがメソッドを持たない場合はFalseを返す（`hou_adapter.py`） |
-| `children()`の再帰 | DOPネットワーク内部への再帰で実質ハング（120秒経っても未完了） | ノードカテゴリ境界（Sop/Dop等）を意識せず無制限に再帰していた | ルート確定時のカテゴリを境界として、異なるカテゴリの子は辿らない |
-| `measured_area()` | `hou.OperationFailed`（`attribValue("measuredarea")`） | `measuredarea`はアトリビュートではなくintrinsic | `intrinsicValue("measuredarea")`に修正 |
-| `output_connections()` | `AttributeError: 'NoneType' object has no attribute 'childTypeCategory'` | `c.outputNode()`がNoneを返すケースがあった | Noneを除外 |
-
-修正後、`spiderweb_v1.hip`（62,749プリム）に対し**build_report: 2.12秒**で完走し、56,788件の違反（大半はzero_area。糸状ジオメトリのため多くのプリミティブが実質面積を持たない、想定通りの結果）を検出。`spiderweb_v2.hip`も同一件数を検出し、v1/v2比較が正しく機能することを確認した。
-
-62,749プリムを人間が1件ずつビューポートで目視チェックすることは現実的に不可能な規模であり（1件1秒でも17時間以上）、この規模のシーンではScene Doctorのような自動検出が実務上ほぼ唯一の現実的な手段になる。
-
-このリポジトリのCI自体にはHoudiniを含められないため、上記はローカルでの手動検証であり自動化されていない。同じ手順を再現する場合:
-
-```bash
-HYTHON="/path/to/Houdini/Resources/bin/hython"
-cd scene_doctor
-"$HYTHON" -c "
-import sys
-sys.path.insert(0, '.')
-sys.path.insert(0, '.venv/lib/python3.12/site-packages')  # PyYAMLをhython側から見えるようにする
-from scene_doctor.adapters.hou_adapter import load_scene
-from scene_doctor_cli import build_report, validate_target_is_sop_network
-from pathlib import Path
-
-hip_path = Path('/path/to/scene.hip')
-geo, network = load_scene(hip_path)
-validate_target_is_sop_network(network)
-report = build_report(str(hip_path), geo, network, naming_rules=[])
-print(report.violation_count)
-"
-```
-
-### HDA実機検証結果（2026-09-07実施）
-
-`hda/SceneDoctor.hdalc`をHoudini 22.0上で実際に構築し、Run All Checks / Export CSV/JSON / Apply Rename Candidatesの全ボタンを動作確認した（`hda/scene_doctor_demo.hip`にテストシーンを保存）。
-
-**重要な設計変更**: 当初`null`SOPをベースにHDA化しようとしたが、`node.canCreateDigitalAsset()`が`False`を返し変換不能だった（Houdiniの制約上、リーフ型のSOPはHDA化できず、`subnet`のようなコンテナ型のみが変換可能）。`subnet`ベースに変更して解決した（[ADR-0005](docs/adr/0005-hda-subnet-base.md)）。
-
-さらに実機検証で2件のバグを発見・修正した。
-
-| 発見箇所 | 症状 | 原因 | 対応 |
-|---|---|---|---|
-| `Run All Checks`ボタン | `No module named 'yaml'` | hython同梱Pythonにpyyaml未同梱 | PythonModuleが`.venv`のsite-packagesをフォールバックで検索するように変更（本番運用では`hython -m pip install pyyaml`を推奨） |
-| 同一バッチ内の複数naming違反 | `box1`と`box2`が両方とも`geo_001`を提案（実際の適用時はHoudini側のunique_name機構で衝突は避けられるが、レポート上の表示が不正確） | `generate_rename_candidate`が「既存ノード名」のみを避け、「このバッチ内で既に提案済みの候補」を考慮していなかった | 提案するたびに候補名を`reserved_names`集合へ追加し、以降の候補生成で回避するよう修正（`checks/naming.py`、テストケース追加済み） |
-
-`Apply Rename Candidates`実行後、`box1`→`geo_001`、`box2_unconnected`→`geo_002`と重複なくリネームされたことを実機で確認した。
-
-`hda/python_module_source.py`にPythonModuleセクションの可読コピーを同梱している（`.hdalc`本体はバイナリのためdiffが読めないことへの対策）。
-
-### PDGバッチ処理
-
-`pdg/batch_topnet.hip`にTOPsネットワークを構築済み（仕様書§10.1準拠）。
+検査のロジック(`checks/`, `rules.py`, `report.py`, CLI の流れ)は `hou` に依存しない純粋な Python。実 `hou` の呼び出しは、`scene_doctor/adapters/hou_adapter.py` だけに閉じ込める([ADR-0001](docs/adr/0001-ports-and-adapters.md))。これにより、Houdini の無い環境でも、ロジックの大部分を TDD で検証できる。
 
 ```
-[File Pattern TOP: hip_files] --*.hip*をglob--> [Python Script TOP: run_scene_doctor]
-    --hython scene_doctor_cli.pyをサブプロセス起動(固定引数のみ、SEC-002)--> [Wait For All TOP]
-    --> [Python Script TOP: aggregate_reports] --個別JSONを集約-->
-        pdg/reports/aggregate_report.json / .csv
+scene_doctor/
+├── interfaces.py          # GeometryLike / NodeLike などの Protocol
+├── adapters/
+│   ├── hou_adapter.py             # 実 hou への依存はここだけ(hython 専用)
+│   └── houdini_panel_launch.py    # パネルの実 Houdini へのドッキング
+├── checks/
+│   ├── geometry.py / quality.py   # 形状 / UV・法線・重複した点
+│   ├── references.py              # キャッシュのパス・HDA の版
+│   ├── usd_stage.py               # USD ステージ(pxr)
+│   ├── nodes.py / naming.py       # ノード構造 / 命名規則
+├── hda_support.py / pdg_support.py   # HDA・PDG から呼ぶ、hou に依存しない部分
+├── ui/                        # PySide6 のパネル(hou を import しない。ADR-0007)
+├── rules.py / report.py       # 命名規則の YAML / CSV・JSON・共通レポート
+scene_doctor_cli.py            # hython から起動する CLI
 ```
 
-`File Pattern`単体のcook（`~/3dcg-dev/houdini_dev/spiderweb_v1.hip`1件の検出・cook成功）は
-実機で確認できたが、`houdini_mcp`（RPCブリッジ、検証専用ツール）経由での
-`cookOutputWorkItems()`等によるネットワーク全体の自動cookは、下流ノードへの
-ワークアイテム伝播が機能せず断念した（PDGの非同期cook処理がRPC越しの同期呼び出しと
-相性が悪いためと推定、[ADR-0006](docs/adr/0006-pdg-manual-cook-only.md)）。
+## 検証
 
-**そのため、バッチ処理全体の動作確認にはHoudini UI上での手動cook実行が必要**（TOPネットワーク
-ペインを開き、`aggregate_reports`ノードを選択して「Cook Output Node」を実行する）。
-`pdg/run_scene_doctor_source.py` / `pdg/aggregate_reports_source.py`に各Python Script TOPの
-可読コピーを同梱している。
-
-## テスト
-
-```bash
-pytest --cov-fail-under=80
-black --check . && isort --check . && flake8 scene_doctor/ scene_doctor_cli.py tests/ && mypy scene_doctor/ scene_doctor_cli.py
-```
-
-72テスト全pass、カバレッジ96%（`adapters/`はカバレッジ計測から除外、理由は[Design Decisions](#design-decisions)参照）。
-`scene_doctor/ui/panel_view_model.py`・`scene_doctor/ui/panel.py`はいずれもカバレッジ100%。
-`panel.py`は`QT_QPA_PLATFORM=offscreen`（`tests/conftest.py`）でヘッドレスQApplicationを起動し、
-`pytest-qt`の`qtbot`で本物のPySide6ウィジェット（`SceneDoctorPanel`）に対しボタンクリック・
-行選択・severity/categoryフィルタ変更など実際のシグナル/スロットを検証している
-（`tests/test_panel.py`）。
+- 自動テスト: 268 件、カバレッジ 98%(CI の下限は 95%)。Linux / macOS / Windows × Python 3.11〜3.13。静的解析は black / isort / flake8 / mypy(strict)/ pip-audit。
+- 実機: `scripts/verify_houdini.py` を `hython` で実行(15 項目、すべて PASS)。記録は [docs/verification](docs/verification/README.md)。
+- 規模: 1 万ノード・20 万プリミティブで約 1.2 秒([docs/benchmark.md](docs/benchmark.md))。実シーン(6.3 万プリミティブ、2026-09)でも数秒で完走した。
 
 ## 既知の制限事項
 
-- `pdg/batch_topnet.hip` はネットワーク構築済みだが、cook実行の自動E2E検証はできていない（Houdini UI上での手動実行が必要、[ADR-0006](docs/adr/0006-pdg-manual-cook-only.md)）
-- ノード探索戦略（`/obj`配下でDisplayフラグが立つ最初のgeoノードを対象にする）は単純化した初期実装であり、複数geoノードを持つ複雑なシーンでの妥当性は未検証
-- `adapters/hou_adapter.py`はtornado_00.hiplc / spiderweb_v1.hip / spiderweb_v2.hip / scene_doctor_demo.hipの4シーンで実機検証済みだが、それ以外の未知のノード構成（Solaris/LOPs、COP等）では同様の実データ特有の問題が起こりうる
-- HDAのPythonModuleは開発中の事故防止のため毎回scene_doctorパッケージを強制リロードする（本番運用では削除しパフォーマンスを優先する余地あり）
-- `adapters/houdini_panel_launch.py`は実機Houdini環境でのみ動作確認可能なため自動テスト対象外。Run Checks・行クリックでのノード選択（`hou.selectedNodes()`）・severity/categoryフィルタ・Export CSV/JSONは実機検証済み（[実機検証結果](#pyside6パネル-実機検証結果2026-09-08実施)参照）。ただし`hou.ui.curDesktop()`経由の正式なタブドッキングへの統合可否と、ネットワークエディタのフレーミング処理（`network_editor.homeToSelection()`、検証時にネットワークエディタペインを開いていなかったため未検証）は今回のセッションでは確認できていない
+- 対象のノードは、`/obj` 配下で表示フラグが立つ最初の geo ノードだけ(単純化した初期の仕様)。複数の geo にまたがる集約は、PDG でファイルごとに行う。
+- PDG の cook は、Houdini の UI で手動実行する(自動の E2E 検証はできていない)。
+- 実機で検証した Houdini は 22.0 だけ。19.5〜21.0 は未検証(版を足す手順は、[検証の記録](docs/verification/houdini-22.0.466.md))。
+- パネルの `hou.ui.curDesktop()` 経由の正式なタブドッキングと、ネットワークエディタのフレーミングは、未確認。
 
-## Design Decisions
+## Design Decisions(ADR)
 
-- **Ports & Adaptersでhouへの依存を分離** — Houdiniなしでもロジックの大部分をテストできるようにするため（[ADR-0001](docs/adr/0001-ports-and-adapters.md)）
-- **PDG（TOPs）でバッチ処理** — 依存関係グラフに基づくスケジューリングと失敗時の部分再実行を標準機能で実現するため（[ADR-0002](docs/adr/0002-pdg-for-batch-processing.md)）
-- **自動修正は行わずリネーム候補の提示に留める** — ジオメトリの自動修正は意図しない形状変化のリスクが高いため（[ADR-0003](docs/adr/0003-no-auto-fix.md)）
-- **非多様体判定は「3枚以上が共有するエッジ」のみを対象とする** — 実装当初は「2枚以外」を非多様体としていたが、TDDで開いた面（境界エッジ、1枚のみ共有）を含む正常なジオメトリのテストを書いたところ誤検出することが判明したため修正した。CGの標準用語でも境界エッジと非多様体エッジは区別されるべき、という判断
-- **YAML読込は`yaml.safe_load`のみ使用** — 任意コード実行を防ぐ多層防御として（SEC-001）
-- **PySide6パネルもPorts & Adaptersで分離** — `panel_view_model.py`（DCC非依存）と`panel.py`（PySide6のみ、houは不使用、コールバック注入）に分離することで、Houdiniなしでも本物のPySide6ウィジェットとしてTDDできるようにするため（[ADR-0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md)）
+| ADR | 決めたこと |
+| --- | --- |
+| [0001](docs/adr/0001-ports-and-adapters.md) | Ports & Adapters で、`hou` への依存を 1 か所に分離する |
+| [0002](docs/adr/0002-pdg-for-batch-processing.md) | バッチは PDG(TOPs)で行う |
+| [0003](docs/adr/0003-no-auto-fix.md) | 自動修正はせず、リネーム候補の提示に留める |
+| [0004](docs/adr/0004-number-not-used.md) | 欠番(使っていない番号の説明) |
+| [0005](docs/adr/0005-hda-subnet-base.md) | HDA は subnet ベース(リーフの SOP は HDA にできない) |
+| [0006](docs/adr/0006-pdg-manual-cook-only.md) | PDG の cook は手動のみ |
+| [0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md) | パネルも Ports & Adapters で分ける |
+
+他の判断: 非多様体は「3 枚以上が共有するエッジ」だけを対象にする(開いた面の境界エッジは正常)。YAML は `yaml.safe_load` だけを使う(SEC-001)。
 
 ## セキュリティに関する注意
 
-Scene Doctorは検証対象の.hipファイルを「出所が既知の信頼済み入力」として扱います。Houdini自体がPythonノードや式を含む.hipファイルを開いた時点でコードを実行しうるため、出所不明の.hipファイルは開かないでください。Scene Doctor自身は以下を一切行いません。
+Scene Doctor は、検証対象の `.hip` を「出所が既知の信頼済みの入力」として扱う。Houdini 自体が、Python ノードや式を含む `.hip` を開いた時点でコードを実行しうるため、出所不明の `.hip` は開かない。
+Scene Doctor 自身は、次のことをしない。
 
-- `yaml.safe_load`以外でのYAML読込
-- `exec`/`eval`による動的コード実行
-- シーンファイルの暗黙的な書き換え（`Apply Rename Candidates`以外）
+- `yaml.safe_load` 以外での YAML 読込
+- `exec` / `eval` による動的コード実行、シェルを介したプロセスの起動(CI と `tests/test_code_rules.py` で強制)
+- シーンの暗黙の書き換え(`Apply Rename Candidates` 以外)
+
+## 変更履歴
+
+[CHANGELOG.md](CHANGELOG.md)(版は Semantic Versioning。タグ `vX.Y.Z` で、リリース用の zip が GitHub Releases に付く)。
 
 ## ライセンス
 
-MIT License（[LICENSE](LICENSE)参照）
+MIT License([LICENSE](LICENSE)参照)。同梱する PyYAML も MIT(`vendor/LICENSE.PyYAML`)。
