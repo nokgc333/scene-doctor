@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common-report.schema.json",
+  "title": "Common inspection report",
+  "description": "A minimal report shape shared by the scene inspection tools.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tool", "generated_at", "subject", "has_errors", "findings"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "tool": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "subject": { "type": "string" },
+    "has_errors": { "type": "boolean" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule", "severity", "target", "message"],
+        "properties": {
+          "rule": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["error", "warning", "info"] },
+          "target": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}
