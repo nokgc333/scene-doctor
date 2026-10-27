@@ -2,3 +2,6 @@
 max-line-length = 100
 extend-ignore = E203
 exclude = .venv,.git,__pycache__,*.egg-info
+# PDG の Python Script TOP は、Houdini が work_item をグローバルに渡す
+per-file-ignores =
+    pdg/*.py:F821
