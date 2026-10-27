@@ -6,50 +6,38 @@ hou.phm()経由でパラメータのボタンコールバックから呼ばれ�
 build_reportを呼ぶ」薄いグルーコードに徹する（Ports & Adapters, ADR-0001）。
 """
 
-import glob
 import os
 import sys
 
-SCENE_DOCTOR_REPO = "/Users/naokikaneko/3dcg-dev/scene_doctor"
-
 
 def _ensure_importable():
-    if SCENE_DOCTOR_REPO not in sys.path:
-        sys.path.insert(0, SCENE_DOCTOR_REPO)
+    """配布物のルート($SCENE_DOCTOR_HOME。Houdini の package ファイルが設定する)を import パスに足す。"""
+    home = os.environ.get("SCENE_DOCTOR_HOME")
+    if not home:
+        raise RuntimeError(
+            "SCENE_DOCTOR_HOME is not set. Install the Scene Doctor Houdini package "
+            "(see README: Houdini パッケージとしてのインストール)."
+        )
+    if home not in sys.path:
+        sys.path.insert(0, home)
 
-    # scene_doctorパッケージ本体はHDA開発中に頻繁に更新されるため、
-    # Houdiniプロセス側にキャッシュされた古いモジュールを毎回破棄してから
-    # 再import する（本番運用では省略してよいが、開発中の事故を避けるため既定で有効にする）。
+    # 開発中に scene_doctor を更新しても、Houdini が古いモジュールを持ち続けないよう、毎回破棄して再 import する。
     for name in list(sys.modules):
         if name == "scene_doctor" or name.startswith("scene_doctor.") or name == "scene_doctor_cli":
             del sys.modules[name]
 
-    # hython同梱のPythonにはPyYAMLが入っていないことが多い。
-    # 本来はデプロイ時に `hython -m pip install pyyaml` 等で解決すべきだが、
-    # 開発環境ではリポジトリの.venvのsite-packagesをフォールバックとして使う。
-    try:
-        import yaml  # noqa: F401
-    except ImportError:
-        candidates = glob.glob(
-            os.path.join(SCENE_DOCTOR_REPO, ".venv", "lib", "python3.*", "site-packages")
-        )
-        for c in candidates:
-            if c not in sys.path:
-                sys.path.insert(0, c)
-
 
 def _load_naming_rules(node):
-    from pathlib import Path
-
     import hou as _hou
 
+    from scene_doctor.hda_support import rules_path_from_parm
     from scene_doctor.rules import RuleFileError, load_naming_rules
 
-    rules_path = node.evalParm("rules_path")
-    if not rules_path:
+    rules_path = rules_path_from_parm(node.evalParm("rules_path"), _hou.expandString)
+    if rules_path is None:
         return []
     try:
-        return load_naming_rules(Path(_hou.expandString(rules_path)))
+        return load_naming_rules(rules_path)
     except RuleFileError as exc:
         _hou.ui.displayMessage(f"Naming rules error: {exc}", severity=_hou.severityType.Error)
         return []
@@ -62,6 +50,7 @@ def _build(node):
     # 呼び出し時点で既にHoudini本体（hython/実プロセス）内で実行されているため
     # `import hou` がそのままネイティブに解決される（RPC越しの検証時とは異なる）。
     from scene_doctor.adapters.hou_adapter import HouGeometryAdapter, HouNodeAdapter
+    from scene_doctor.hda_support import options_from_parms
     from scene_doctor_cli import build_report
 
     parent = node.parent()
@@ -86,12 +75,7 @@ def _build(node):
         geo_adapter,
         network_adapter,
         naming_rules,
-        enable_geometry=node.evalParm("enable_geometry"),
-        enable_nodes=node.evalParm("enable_nodes"),
-        enable_naming=node.evalParm("enable_naming"),
-        ngon_threshold=node.evalParm("ngon_threshold"),
-        zero_area_epsilon=node.evalParm("zero_area_epsilon"),
-        recurse_into_subnets=node.evalParm("recurse_subnets"),
+        **options_from_parms(node.evalParm),
     )
     return report
 
@@ -102,16 +86,13 @@ def run_checks(node):
 
     try:
         report = _build(node)
+        from scene_doctor.hda_support import format_results
     except Exception as exc:  # noqa: BLE001 - UIへ確実に伝えるため意図的に広く捕捉
         _hou.ui.displayMessage(f"Scene Doctor error: {exc}", severity=_hou.severityType.Error)
         return
 
     node.parm("violation_count").set(report.violation_count)
-    lines = [f"{report.violation_count} violation(s) found in {report.hip_path}", ""]
-    for v in report.violations:
-        suffix = f" -> rename to '{v.rename_candidate}'" if v.rename_candidate else ""
-        lines.append(f"[{v.check_type}] {v.target_path}: {v.message}{suffix}")
-    node.parm("results").set("\n".join(lines))
+    node.parm("results").set(format_results(report))
 
 
 def export_report(node):
@@ -151,13 +132,13 @@ def apply_rename(node):
         _hou.ui.displayMessage(f"Scene Doctor error: {exc}", severity=_hou.severityType.Error)
         return
 
+    from scene_doctor.hda_support import rename_targets
+
     applied = 0
-    for v in report.violations:
-        if v.check_type != "naming" or not v.rename_candidate:
-            continue
-        target = _hou.node(v.target_path)
+    for node_path, new_name in rename_targets(report):
+        target = _hou.node(node_path)
         if target is not None:
-            target.setName(v.rename_candidate, unique_name=True)
+            target.setName(new_name, unique_name=True)
             applied += 1
 
     _hou.ui.displayMessage(
