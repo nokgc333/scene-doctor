@@ -22,19 +22,24 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: black --check .
       - run: isort --check .
-      - run: flake8 scene_doctor/ scene_doctor_cli.py tests/
+      - run: flake8 scene_doctor/ scene_doctor_cli.py tests/ hda/ pdg/ scripts/
       - run: mypy scene_doctor/ scene_doctor_cli.py
       - name: "静的チェック: checks/配下がhouをimportしていないこと（FR-006 TC-021）"
         run: |
           if grep -rn "^import hou\|^from hou" scene_doctor/checks/; then
             echo "checks/ must not depend on hou directly"; exit 1
           fi
+      - name: "静的チェック: シェルでプロセスを起動しないこと（shell=True / os.system）"
+        run: |
+          if grep -rnE "shell *= *True|os\.system\(|os\.popen\(" scene_doctor/ scene_doctor_cli.py hda/ pdg/ scripts/; then
+            echo "the shell must not be used to start processes"; exit 1
+          fi
       - name: "静的チェック: exec/evalの不使用（SEC-002）"
         run: |
           if grep -rn "exec(\|eval(" scene_doctor/ scene_doctor_cli.py; then
             echo "exec/eval must not be used"; exit 1
           fi
-      - run: pytest --cov-fail-under=80
+      - run: pytest --cov-fail-under=95
         env:
           QT_QPA_PLATFORM: offscreen
       - run: pip-audit
