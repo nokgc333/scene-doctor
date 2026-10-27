@@ -87,7 +87,7 @@ class FakeParm:
     def unexpandedString(self) -> str:  # noqa: N802
         return self._raw
 
-    def eval(self) -> str:
+    def evalAsString(self) -> str:  # noqa: N802
         return self._expanded
 
 

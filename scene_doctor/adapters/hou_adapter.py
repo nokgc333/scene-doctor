@@ -163,7 +163,7 @@ class HouNodeAdapter:
                 template.type() == hou.parmTemplateType.String
                 and template.stringType() == hou.stringParmType.FileReference
             ):
-                found.append((parm.name(), str(parm.unexpandedString()), str(parm.eval())))
+                found.append((parm.name(), str(parm.unexpandedString()), str(parm.evalAsString())))
         return found
 
     def hda_version(self) -> tuple[str, str, str] | None:
