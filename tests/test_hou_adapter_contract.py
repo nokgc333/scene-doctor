@@ -233,3 +233,93 @@ def test_the_fake_has_the_attributes_the_adapter_module_needs() -> None:
 
     for name in ("hipFile", "node", "Geometry"):
         assert hasattr(hou, name)
+
+
+class TestExtendedAdapterMethods:
+    def test_a_prim_has_uvs_when_either_the_vertex_or_the_point_attribute_exists(self) -> None:
+        module, _ = _adapter()
+
+        def adapt(**kw):  # type: ignore[no-untyped-def]
+            return module.HouPrimAdapter(FakeHouPrim([0, 1, 2], **kw)).has_uv()
+
+        assert adapt(vertex_uv=True) is True
+        assert adapt(point_uv=True) is True
+        assert adapt() is False
+
+    def test_the_normal_is_returned_as_three_floats(self) -> None:
+        module, _ = _adapter()
+
+        normal = module.HouPrimAdapter(FakeHouPrim([0, 1, 2], normal=(0.0, 1.0, 0.0))).normal()
+
+        assert tuple(normal) == (0.0, 1.0, 0.0)
+
+    def test_the_centroid_is_the_average_of_the_vertex_positions(self) -> None:
+        module, _ = _adapter()
+        prim = FakeHouPrim([0, 1, 2], positions=[(0.0, 0.0, 0.0), (3.0, 0.0, 0.0), (0.0, 3.0, 0.0)])
+
+        assert module.HouPrimAdapter(prim).centroid() == (1.0, 1.0, 0.0)
+
+    def test_the_centroid_of_a_prim_without_vertices_does_not_divide_by_zero(self) -> None:
+        module, _ = _adapter()
+
+        assert module.HouPrimAdapter(FakeHouPrim([])).centroid() == (0.0, 0.0, 0.0)
+
+    def test_the_geometry_lists_its_point_positions(self) -> None:
+        from tests.fake_hou import FakePoint
+
+        module, _ = _adapter()
+        geometry = FakeHouGeometry(
+            points=[FakePoint(0, (1.0, 2.0, 3.0)), FakePoint(1, (0.0, 0.0, 0.0))]
+        )
+
+        assert module.HouGeometryAdapter(geometry).point_positions() == [
+            (1.0, 2.0, 3.0),
+            (0.0, 0.0, 0.0),
+        ]
+
+    def test_only_file_reference_string_parms_are_reported_with_raw_and_expanded_values(
+        self,
+    ) -> None:
+        from tests.fake_hou import FakeParm
+
+        module, _ = _adapter()
+        node = FakeHouNode(
+            "/obj/geo1/file1",
+            parms=[
+                FakeParm("file", "$HIP/a.bgeo", "/proj/a.bgeo"),
+                FakeParm("label", "hello", "hello", string_type="Regular"),
+                FakeParm("count", "3", "3", kind="Int", string_type=None),
+            ],
+        )
+
+        paths = module.HouNodeAdapter(node, "Sop").file_paths()
+
+        assert list(paths) == [("file", "$HIP/a.bgeo", "/proj/a.bgeo")]
+
+    def test_a_node_that_is_not_an_hda_has_no_version(self) -> None:
+        module, _ = _adapter()
+
+        assert module.HouNodeAdapter(FakeHouNode("/obj/geo1/box1")).hda_version() is None
+
+    def test_an_hda_reports_its_version_and_the_latest_loaded_one(self) -> None:
+        from tests.fake_hou import FakeCategory, FakeNodeType
+
+        module, _ = _adapter()
+        old = FakeNodeType("studio::Tool::1.0", "Sop", ("", "studio", "Tool", "1.0"), is_hda=True)
+        new = FakeNodeType("studio::Tool::2.10", "Sop", ("", "studio", "Tool", "2.10"), is_hda=True)
+        other = FakeNodeType(
+            "studio::Other::9.0", "Sop", ("", "studio", "Other", "9.0"), is_hda=True
+        )
+        category = FakeCategory("Sop", {t.name(): t for t in (old, new, other)})
+        old._category = category
+        node = FakeHouNode("/obj/geo1/tool1", node_type=old)
+
+        info = module.HouNodeAdapter(node).hda_version()
+
+        assert info == ("studio::Tool", "1.0", "2.10")
+
+    def test_versions_are_compared_as_numbers_not_text(self) -> None:
+        module, _ = _adapter()
+
+        assert module.latest_version(["2.9", "2.10", "1.0"]) == "2.10"
+        assert module.latest_version([]) == ""

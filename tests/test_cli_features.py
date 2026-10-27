@@ -126,7 +126,7 @@ class TestListRules:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert cli.main([]) == cli.EXIT_INVALID_PARAMETER
-        assert "--hip is required" in capsys.readouterr().err
+        assert "--hip or --usd is required" in capsys.readouterr().err
 
 
 class TestFailOn:

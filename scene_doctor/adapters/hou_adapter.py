@@ -14,11 +14,20 @@ pytest（venv）環境には `hou` が存在しないため、CI の型チェッ
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import hou  # type: ignore[import-not-found]
 
 from scene_doctor.interfaces import GeometryLike, NodeLike, PrimLike
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) if part.isdigit() else 0 for part in version.split("."))
+
+
+def latest_version(versions: Sequence[str]) -> str:
+    """版の文字列(`1.0` `2.10` など)の中で、最も新しいもの。数として比べる(`2.10` > `2.9`)。"""
+    return max(versions, key=_version_key) if versions else ""
 
 
 class HouPrimAdapter:
@@ -29,6 +38,27 @@ class HouPrimAdapter:
 
     def vertex_point_ids(self) -> Sequence[int]:
         return [vertex.point().number() for vertex in self._prim.vertices()]
+
+    def has_uv(self) -> bool:
+        """`uv` が、頂点属性にも点属性にもあるか(どちらかにあれば、UV はある)。"""
+        geometry = self._prim.geometry()
+        return (
+            geometry.findVertexAttrib("uv") is not None
+            or geometry.findPointAttrib("uv") is not None
+        )
+
+    def normal(self) -> tuple[float, float, float]:
+        n = self._prim.normal()
+        return (n[0], n[1], n[2])
+
+    def centroid(self) -> tuple[float, float, float]:
+        points = [v.point().position() for v in self._prim.vertices()]
+        count = len(points) or 1
+        return (
+            sum(p[0] for p in points) / count,
+            sum(p[1] for p in points) / count,
+            sum(p[2] for p in points) / count,
+        )
 
     def measured_area(self) -> float:
         # "measuredarea"はアトリビュートではなくintrinsic（計算プロパティ）。
@@ -45,6 +75,11 @@ class HouGeometryAdapter:
 
     def prims(self) -> Sequence[PrimLike]:
         return [HouPrimAdapter(p) for p in self._geometry.prims()]
+
+    def point_positions(self) -> Sequence[tuple[float, float, float]]:
+        return [
+            (p.position()[0], p.position()[1], p.position()[2]) for p in self._geometry.points()
+        ]
 
 
 class HouNodeAdapter:
@@ -119,6 +154,31 @@ class HouNodeAdapter:
     def set_name(self, new_name: str) -> None:
         self._node.setName(new_name, unique_name=True)
 
+    def file_paths(self) -> Sequence[tuple[str, str, str]]:
+        """ファイルを参照する文字列パラメーターの(名前, 書かれた文字列, 変数を展開した実際のパス)。"""
+        found: list[tuple[str, str, str]] = []
+        for parm in self._node.parms():
+            template = parm.parmTemplate()
+            if (
+                template.type() == hou.parmTemplateType.String
+                and template.stringType() == hou.stringParmType.FileReference
+            ):
+                found.append((parm.name(), str(parm.unexpandedString()), str(parm.eval())))
+        return found
+
+    def hda_version(self) -> tuple[str, str, str] | None:
+        """HDA のインスタンスなら(名前, 使っている版, 読み込まれている最新の版)。"""
+        node_type = self._node.type()
+        if node_type.definition() is None:
+            return None
+        scope, namespace, name, version = node_type.nameComponents()
+        siblings = [
+            t.nameComponents()[3]
+            for t in node_type.category().nodeTypes().values()
+            if t.nameComponents()[:3] == (scope, namespace, name)
+        ]
+        return (f"{namespace}::{name}" if namespace else name, version, latest_version(siblings))
+
 
 def load_scene(hip_path: Path) -> tuple[GeometryLike, NodeLike]:
     """.hipファイルを開き、検証対象のジオメトリとノードネットワークを返す。
@@ -139,3 +199,15 @@ def load_scene(hip_path: Path) -> tuple[GeometryLike, NodeLike]:
     geometry = display_sop.geometry() if display_sop is not None else hou.Geometry()
 
     return HouGeometryAdapter(geometry), HouNodeAdapter(target)
+
+
+def load_lop_stage(hip_path: Path, lop_node_path: str) -> Any:
+    """.hip を開き、指定した LOP ノードの USD ステージ(`pxr.Usd.Stage`)を返す。"""
+    hou.hipFile.load(str(hip_path), suppress_save_prompt=True)
+    node = hou.node(lop_node_path)
+    if node is None:
+        raise ValueError(f"'{lop_node_path}' does not exist in '{hip_path}'")
+    stage = node.stage() if hasattr(node, "stage") else None
+    if stage is None:
+        raise ValueError(f"'{lop_node_path}' is not a LOP node (it has no USD stage)")
+    return stage
