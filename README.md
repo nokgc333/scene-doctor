@@ -1,5 +1,7 @@
 # Scene Doctor
 
+[![CI](https://github.com/nokgc333/scene-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/nokgc333/scene-doctor/actions/workflows/ci.yml)
+
 Houdiniシーンのジオメトリ欠陥・ノード構造・命名規則・参照(キャッシュ/HDA)・USDステージを自動検出するツール。
 
 > **English summary**
@@ -21,34 +23,36 @@ Scene Doctorは、これをバッチで自動検出し、レポートにする�
 
 ## 検査の一覧
 
-| 種類 | 検査(`check_type`) | 重さ | 内容 |
-| --- | --- | --- | --- |
-| ジオメトリ | `nonmanifold` | error | 3枚以上が共有するエッジ |
-| ジオメトリ | `ngon` | warning | 辺の数が閾値を超えるポリゴン |
-| ジオメトリ | `zero_area` | error | 面積がほぼ 0 のポリゴン |
-| 品質 | `missing_uv` | warning | UV が無いプリミティブ |
-| 品質 | `flipped_normal` | warning | 法線が内向きのプリミティブ(重心基準。4面以上) |
-| 品質 | `duplicate_point` | warning | 同じ位置の点 |
-| 参照 | `missing_file` | error | 存在しないファイルを指すパラメーター(`$HIP` などを展開して確認) |
-| 参照 | `hardcoded_path` | warning | 変数を使わない絶対パス |
-| 参照 | `outdated_hda` | warning | 最新ではない版の HDA |
-| ノード | `unconnected_node` / `unused_bypassed` | warning | 出力が無いノード / バイパスされたままのノード |
-| 命名 | `naming` | warning | 命名規則(YAML)に合わない名前。リネーム候補つき |
-| USD | `usd_default_prim` | warning | 既定 Prim が無い、または存在しない Prim を指す |
-| USD | `usd_unresolved_reference` | error | 解決できない参照・サブレイヤー |
-| USD | `usd_no_material` / `usd_no_uv` | warning | マテリアルのバインドが無い / UV(`st`)が無いメッシュ |
+- **ジオメトリ**
+  - **`nonmanifold`:** 重さ: error; 内容: 3枚以上が共有するエッジ
+  - **`ngon`:** 重さ: warning; 内容: 辺の数が閾値を超えるポリゴン
+  - **`zero_area`:** 重さ: error; 内容: 面積がほぼ 0 のポリゴン
+- **品質**
+  - **`missing_uv`:** 重さ: warning; 内容: UV が無いプリミティブ
+  - **`flipped_normal`:** 重さ: warning; 内容: 法線が内向きのプリミティブ(重心基準。4面以上)
+  - **`duplicate_point`:** 重さ: warning; 内容: 同じ位置の点
+- **参照**
+  - **`missing_file`:** 重さ: error; 内容: 存在しないファイルを指すパラメーター(`$HIP` などを展開して確認)
+  - **`hardcoded_path`:** 重さ: warning; 内容: 変数を使わない絶対パス
+  - **`outdated_hda`:** 重さ: warning; 内容: 最新ではない版の HDA
+- **ノード**
+  - **`unconnected_node` / `unused_bypassed`:** 重さ: warning; 内容: 出力が無いノード / バイパスされたままのノード
+- **命名**
+  - **`naming`:** 重さ: warning; 内容: 命名規則(YAML)に合わない名前。リネーム候補つき
+- **USD**
+  - **`usd_default_prim`:** 重さ: warning; 内容: 既定 Prim が無い、または存在しない Prim を指す
+  - **`usd_unresolved_reference`:** 重さ: error; 内容: 解決できない参照・サブレイヤー
+  - **`usd_no_material` / `usd_no_uv`:** 重さ: warning; 内容: マテリアルのバインドが無い / UV(`st`)が無いメッシュ
 
 ジオメトリの自動修正はしない。リネーム候補を示すだけに留める([ADR-0003](docs/adr/0003-no-auto-fix.md))。
 
 ## 動作環境
 
-| 項目 | 内容 |
-| --- | --- |
-| Houdini | **22.0.466: 実機で検証済み**(`scripts/verify_houdini.py` の 15 項目、[記録](docs/verification/houdini-22.0.466.md))。22.0.429: 手動で確認([履歴](docs/verification/history-2026-09.md))。19.5〜21.0: 未検証(この環境に無い) |
-| Python | 3.11 / 3.12 / 3.13(CI で確認)。Houdini 22 の `hython` は 3.13 |
-| OS | macOS: 実機(Houdini)で検証。Linux / macOS / Windows: CI でテストを実行(Houdini なし) |
-| 依存 | PyYAML(配布物に同梱)。`--usd` には `usd-core`(任意。Houdini の `hython` では、Houdini 自身の `pxr` を使う) |
-| Houdini ライセンス | Steam 版 Houdini Indie は、Steam を起動してから `hython` を使う |
+- **Houdini:** **22.0.466: 実機で検証済み**(`scripts/verify_houdini.py` の 15 項目、[記録](docs/verification/houdini-22.0.466.md))。22.0.429: 手動で確認([履歴](docs/verification/history-2026-09.md))。19.5〜21.0: 未検証(この環境に無い)
+- **Python:** 3.11 / 3.12 / 3.13(CI で確認)。Houdini 22 の `hython` は 3.13
+- **OS:** macOS: 実機(Houdini)で検証。Linux / macOS / Windows: CI でテストを実行(Houdini なし)
+- **依存:** PyYAML(配布物に同梱)。`--usd` には `usd-core`(任意。Houdini の `hython` では、Houdini 自身の `pxr` を使う)
+- **Houdini ライセンス:** Steam 版 Houdini Indie は、Steam を起動してから `hython` を使う
 
 ## インストール
 
@@ -61,11 +65,9 @@ Scene Doctorは、これをバッチで自動検出し、レポートにする�
    python install_package.py --prefs ~/Library/Preferences/houdini/22.0
    ```
 
-   | OS | ユーザー設定フォルダの例 |
-   | --- | --- |
-   | macOS | `~/Library/Preferences/houdini/22.0` |
-   | Windows | `~/Documents/houdini22.0` |
-   | Linux | `~/houdini22.0` |
+   - **macOS:** `~/Library/Preferences/houdini/22.0`
+   - **Windows:** `~/Documents/houdini22.0`
+   - **Linux:** `~/houdini22.0`
 
 3. Houdini を再起動する。`$SCENE_DOCTOR_HOME` が設定され、`hython` から `scene_doctor` を import でき、HDA(`Scene Doctor`)が SOP のノードとして現れる。
 
@@ -89,16 +91,14 @@ pytest --cov-fail-under=95
 hython scene_doctor_cli.py --hip path/to/scene.hip --format all
 ```
 
-| オプション | 内容 |
-| --- | --- |
-| `--hip` / `--usd` / `--lop` | 検査する `.hip` / USD ファイル(Houdini 不要)/ `.hip` の中の LOP ノード(例: `/stage/out`) |
-| `--rules` | 命名規則の YAML(既定: `rules/default.yaml`。`--list-rules` で一覧) |
-| `--out` / `--format` | 出力先と形式: `csv` / `json` / `common`(共通レポート)/ `both` / `all` |
-| `--fail-on` | 終了コード 1 にする重さ: `warning`(既定)/ `error` / `never` |
-| `--skip` | 検査の種類を外す: `geometry` / `quality` / `references` / `nodes` / `naming` |
-| `--force` | 既存のレポートを上書きする(無いと、終了コード 16) |
-| `--redact-home` | レポートのホームフォルダ(利用者名)を `~` にして、共有しやすくする |
-| `--quiet` / `--verbose` | 標準出力を抑える / 進捗を標準エラーに出す |
+- **`--hip` / `--usd` / `--lop`:** 検査する `.hip` / USD ファイル(Houdini 不要)/ `.hip` の中の LOP ノード(例: `/stage/out`)
+- **`--rules`:** 命名規則の YAML(既定: `rules/default.yaml`。`--list-rules` で一覧)
+- **`--out` / `--format`:** 出力先と形式: `csv` / `json` / `common`(共通レポート)/ `both` / `all`
+- **`--fail-on`:** 終了コード 1 にする重さ: `warning`(既定)/ `error` / `never`
+- **`--skip`:** 検査の種類を外す: `geometry` / `quality` / `references` / `nodes` / `naming`
+- **`--force`:** 既存のレポートを上書きする(無いと、終了コード 16)
+- **`--redact-home`:** レポートのホームフォルダ(利用者名)を `~` にして、共有しやすくする
+- **`--quiet` / `--verbose`:** 標準出力を抑える / 進捗を標準エラーに出す
 
 Houdini なしで USD を検査する例と、その出力は [docs/samples](docs/samples) にある。
 
@@ -108,17 +108,15 @@ python scene_doctor_cli.py --usd docs/samples/broken_asset.usda --format all --r
 
 終了コード:
 
-| コード | 意味 |
-| --- | --- |
-| 0 | 違反なし(`--fail-on` の水準で) |
-| 1 | 違反あり |
-| 10 | 指定のファイルが無い |
-| 11 | 不正なパラメーター(例: geo ノードが無いシーン) |
-| 12 | 対象のノードが SOP ネットワークではない |
-| 13 | 命名規則のファイルが無い・不正 |
-| 14 | レポートを書き込めない |
-| 15 | Houdini の `hou` が無い(`hython` で実行する) |
-| 16 | レポートが既にある(`--force` で上書き) |
+- **0:** 違反なし(`--fail-on` の水準で)
+- **1:** 違反あり
+- **10:** 指定のファイルが無い
+- **11:** 不正なパラメーター(例: geo ノードが無いシーン)
+- **12:** 対象のノードが SOP ネットワークではない
+- **13:** 命名規則のファイルが無い・不正
+- **14:** レポートを書き込めない
+- **15:** Houdini の `hou` が無い(`hython` で実行する)
+- **16:** レポートが既にある(`--force` で上書き)
 
 `--format common` は、他のツールが読める共通のレポート(`schema_version` / `tool` / `findings[]`)を出す。スキーマは [docs/schema/common-report.schema.json](docs/schema/common-report.schema.json)。
 
@@ -148,17 +146,33 @@ cook は、Houdini の UI から手動で実行する([ADR-0006](docs/adr/0006-p
 
 ## トラブルシューティング
 
-| 症状 | 原因 | 対処 |
-| --- | --- | --- |
-| `ModuleNotFoundError: hou` / 終了コード 15 | 普通の Python で実行している | `hython scene_doctor_cli.py ...` で実行する(`--list-rules` と `--usd` は不要) |
-| `SCENE_DOCTOR_HOME is not set` | package が登録されていない | 「インストール」の手順 2 を実行し、Houdini を再起動する |
-| `hython` で `No module named 'yaml'` | 開発用に、リポジトリをそのまま使っている | リリースの zip を使う(PyYAML 同梱)。開発中は、PyYAML だけを置いたフォルダを `PYTHONPATH` に渡す |
-| `--lop` で `UsdTyped has not been created yet` | `PYTHONPATH` の `usd-core` が、Houdini の `pxr` と衝突している | `PYTHONPATH` から `usd-core` を外す(`hython` では、Houdini 自身の `pxr` を使う) |
-| `--usd` で `pip install usd-core` と言われる | `pxr` が無い | `pip install usd-core`(Houdini の外で使うとき) |
-| 終了コード 16 | 同じ名前のレポートが既にある | `--force`、または `--out` を変える |
-| `hython` が、出力のあとも終了しない / `Address already in use` | Houdini の RPC サーバーの既知の挙動(害は無い) | 出力を確認したら、プロセスを止める |
-| `hython` がライセンスを取れない | Steam 版 Houdini Indie は、Steam が必要 | Steam を起動してから実行する |
-| パネルを出したら Houdini が固まった | メインスレッド以外から Qt を操作した | 上の「注意」を参照 |
+- **`ModuleNotFoundError: hou` / 終了コード 15**
+  - 原因: 普通の Python で実行している
+  - 対処: `hython scene_doctor_cli.py ...` で実行する(`--list-rules` と `--usd` は不要)
+- **`SCENE_DOCTOR_HOME is not set`**
+  - 原因: package が登録されていない
+  - 対処: 「インストール」の手順 2 を実行し、Houdini を再起動する
+- **`hython` で `No module named 'yaml'`**
+  - 原因: 開発用に、リポジトリをそのまま使っている
+  - 対処: リリースの zip を使う(PyYAML 同梱)。開発中は、PyYAML だけを置いたフォルダを `PYTHONPATH` に渡す
+- **`--lop` で `UsdTyped has not been created yet`**
+  - 原因: `PYTHONPATH` の `usd-core` が、Houdini の `pxr` と衝突している
+  - 対処: `PYTHONPATH` から `usd-core` を外す(`hython` では、Houdini 自身の `pxr` を使う)
+- **`--usd` で `pip install usd-core` と言われる**
+  - 原因: `pxr` が無い
+  - 対処: `pip install usd-core`(Houdini の外で使うとき)
+- **終了コード 16**
+  - 原因: 同じ名前のレポートが既にある
+  - 対処: `--force`、または `--out` を変える
+- **`hython` が、出力のあとも終了しない / `Address already in use`**
+  - 原因: Houdini の RPC サーバーの既知の挙動(害は無い)
+  - 対処: 出力を確認したら、プロセスを止める
+- **`hython` がライセンスを取れない**
+  - 原因: Steam 版 Houdini Indie は、Steam が必要
+  - 対処: Steam を起動してから実行する
+- **パネルを出したら Houdini が固まった**
+  - 原因: メインスレッド以外から Qt を操作した
+  - 対処: 上の「注意」を参照
 
 ## アーキテクチャ(Ports & Adapters)
 
@@ -196,15 +210,13 @@ scene_doctor_cli.py            # hython から起動する CLI
 
 ## Design Decisions(ADR)
 
-| ADR | 決めたこと |
-| --- | --- |
-| [0001](docs/adr/0001-ports-and-adapters.md) | Ports & Adapters で、`hou` への依存を 1 か所に分離する |
-| [0002](docs/adr/0002-pdg-for-batch-processing.md) | バッチは PDG(TOPs)で行う |
-| [0003](docs/adr/0003-no-auto-fix.md) | 自動修正はせず、リネーム候補の提示に留める |
-| [0004](docs/adr/0004-number-not-used.md) | 欠番(使っていない番号の説明) |
-| [0005](docs/adr/0005-hda-subnet-base.md) | HDA は subnet ベース(リーフの SOP は HDA にできない) |
-| [0006](docs/adr/0006-pdg-manual-cook-only.md) | PDG の cook は手動のみ |
-| [0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md) | パネルも Ports & Adapters で分ける |
+- **[0001](docs/adr/0001-ports-and-adapters.md):** Ports & Adapters で、`hou` への依存を 1 か所に分離する
+- **[0002](docs/adr/0002-pdg-for-batch-processing.md):** バッチは PDG(TOPs)で行う
+- **[0003](docs/adr/0003-no-auto-fix.md):** 自動修正はせず、リネーム候補の提示に留める
+- **[0004](docs/adr/0004-number-not-used.md):** 欠番(使っていない番号の説明)
+- **[0005](docs/adr/0005-hda-subnet-base.md):** HDA は subnet ベース(リーフの SOP は HDA にできない)
+- **[0006](docs/adr/0006-pdg-manual-cook-only.md):** PDG の cook は手動のみ
+- **[0007](docs/adr/0007-pyside6-panel-ports-and-adapters.md):** パネルも Ports & Adapters で分ける
 
 他の判断: 非多様体は「3 枚以上が共有するエッジ」だけを対象にする(開いた面の境界エッジは正常)。YAML は `yaml.safe_load` だけを使う(SEC-001)。
 
